@@ -36,7 +36,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
         lastError = ""
         status = "正在尋找 USB 相機…"
         browsing = true
-        ICDeviceBrowser.requestContentsAuthorization { [weak self] auth in
+        browser.requestContentsAuthorization { [weak self] auth in
             Task { @MainActor in
                 guard let self else { return }
                 if auth != .authorized {
@@ -114,19 +114,16 @@ final class CameraCaptureService: NSObject, ObservableObject {
             file,
             options: options,
             downloadDelegate: self,
-            didDownloadSelector: #selector(didDownloadFile(_:error:options:contextInfo:)),
+            didDownloadSelector: #selector(CameraCaptureService.didDownloadFile(_:error:options:contextInfo:)),
             contextInfo: Unmanaged.passRetained(ctx).toOpaque()
         )
     }
 
-    @objc private func didDownloadFile(
-        _ file: ICCameraFile?,
-        error: Error?,
-        options: [AnyHashable: Any]?,
-        contextInfo: UnsafeMutableRawPointer?
+    private func finishDownload(
+        ctx: DownloadContext,
+        error: (any Error)?,
+        options: [String: Any]?
     ) {
-        guard let contextInfo else { return }
-        let ctx = Unmanaged<DownloadContext>.fromOpaque(contextInfo).takeRetainedValue()
         downloading.remove(ctx.key)
         if let error {
             lastError = error.localizedDescription
@@ -134,9 +131,11 @@ final class CameraCaptureService: NSObject, ObservableObject {
             return
         }
         knownHandles.insert(ctx.key)
-        let path = (options?[ICDownloadOption.savedFilename] as? String).flatMap { name in
-            ctx.dest.deletingLastPathComponent().appendingPathComponent(name)
-        } ?? ctx.dest
+        // We set saveAsFilename ourselves; prefer that path, fall back to framework key.
+        var path = ctx.dest
+        if let saved = options?["ICSavedFilename"] as? String, !saved.isEmpty {
+            path = ctx.dest.deletingLastPathComponent().appendingPathComponent(saved)
+        }
         do {
             let data = try Data(contentsOf: path)
             let sha = Self.sha256Hex(data)
@@ -259,4 +258,18 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
     }
 }
 
-extension CameraCaptureService: ICCameraDeviceDownloadDelegate {}
+extension CameraCaptureService: ICCameraDeviceDownloadDelegate {
+    /// Matches ImageCaptureCore optional requirement (nonisolated for @MainActor class).
+    @objc nonisolated func didDownloadFile(
+        _ file: ICCameraFile,
+        error: (any Error)?,
+        options: [String: Any]?,
+        contextInfo: UnsafeMutableRawPointer?
+    ) {
+        guard let contextInfo else { return }
+        let ctx = Unmanaged<DownloadContext>.fromOpaque(contextInfo).takeRetainedValue()
+        Task { @MainActor in
+            self.finishDownload(ctx: ctx, error: error, options: options)
+        }
+    }
+}
