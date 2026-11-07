@@ -20,6 +20,7 @@ workflows:
         script: |
           set -euo pipefail
           # ImageCaptureCore is device-only; simulator SDK has no module.
+          set +e
           xcodebuild \
             -project ios/CamLink.xcodeproj \
             -scheme "$XCODE_SCHEME" \
@@ -29,7 +30,14 @@ workflows:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build
+            build 2>&1 | tee /tmp/camlink-xcodebuild.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "---- swift errors ----"
+            grep -E 'error:|fatal error:' /tmp/camlink-xcodebuild.log || true
+            exit "$status"
+          fi
     artifacts:
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/Debug-iphoneos/*.app
     triggering:

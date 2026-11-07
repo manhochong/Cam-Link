@@ -132,7 +132,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
     private func finishDownload(
         key: String,
         error: (any Error)?,
-        options: [String: Any]?
+        options: [String: Any]
     ) {
         let ctx = downloadContexts.removeValue(forKey: key)
         downloadSinks.removeValue(forKey: key)
@@ -146,7 +146,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
         knownHandles.insert(ctx.key)
         // We set saveAsFilename ourselves; prefer that path, fall back to framework key.
         var path = ctx.dest
-        if let saved = options?["ICSavedFilename"] as? String, !saved.isEmpty {
+        if let saved = options["ICSavedFilename"] as? String, !saved.isEmpty {
             path = ctx.dest.deletingLastPathComponent().appendingPathComponent(saved)
         }
         do {
@@ -195,16 +195,17 @@ private final class DownloadContext: NSObject {
 }
 
 private final class DownloadSink: NSObject, ICCameraDeviceDownloadDelegate {
-    private let onDone: ((any Error)?, [String: Any]?) -> Void
+    private let onDone: ((any Error)?, [String: Any]) -> Void
 
-    init(onDone: @escaping ((any Error)?, [String: Any]?) -> Void) {
+    init(onDone: @escaping ((any Error)?, [String: Any]) -> Void) {
         self.onDone = onDone
     }
 
-    @objc func didDownloadFile(
+    // Match ImageCaptureCore ObjC selector; keep off MainActor (see CameraCaptureService).
+    func didDownloadFile(
         _ file: ICCameraFile,
-        error: (any Error)?,
-        options: [String: Any] = [:],
+        error: Error?,
+        options: [String: Any],
         contextInfo: UnsafeMutableRawPointer?
     ) {
         onDone(error, options)
@@ -277,12 +278,20 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
         }
     }
 
-    nonisolated func didRemove(_ camera: ICCameraDevice) {
+    nonisolated func didRemove(_ device: ICDevice) {
         Task { @MainActor in
-            if camera === self.camera {
+            if device === self.camera {
                 self.camera = nil
                 self.connected = false
                 self.status = "相機已移除"
+            }
+        }
+    }
+
+    nonisolated func device(_ device: ICDevice, didEncounterError error: (any Error)?) {
+        Task { @MainActor in
+            if let error {
+                self.lastError = error.localizedDescription
             }
         }
     }

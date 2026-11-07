@@ -149,7 +149,7 @@ private final class ProbeBox: NSObject, URLSessionDelegate {
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
         if let trust = challenge.protectionSpace.serverTrust,
-           let cert = SecTrustGetCertificateAtIndex(trust, 0) {
+           let cert = Self.firstCertificate(trust) {
             let data = SecCertificateCopyData(cert) as Data
             fingerprint = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         }
@@ -178,7 +178,7 @@ private final class PinningDelegate: NSObject, URLSessionDelegate {
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
         guard let trust = challenge.protectionSpace.serverTrust,
-              let cert = SecTrustGetCertificateAtIndex(trust, 0)
+              let cert = Self.firstCertificate(trust)
         else {
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
@@ -190,6 +190,24 @@ private final class PinningDelegate: NSObject, URLSessionDelegate {
         } else {
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
+    }
+}
+
+private enum TrustCert {
+    static func firstCertificate(_ trust: SecTrust) -> SecCertificate? {
+        (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first
+    }
+}
+
+private extension ProbeBox {
+    static func firstCertificate(_ trust: SecTrust) -> SecCertificate? {
+        TrustCert.firstCertificate(trust)
+    }
+}
+
+private extension PinningDelegate {
+    static func firstCertificate(_ trust: SecTrust) -> SecCertificate? {
+        TrustCert.firstCertificate(trust)
     }
 }
 
