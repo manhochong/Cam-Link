@@ -1,0 +1,45 @@
+Cam Link - LUMIX wireless tethering interoperability diagnostics
+Prepared: 2026-11-06 (Hong Kong)
+Status: Read-only discovery completed; wireless tethering NOT established.
+
+Purpose
+Direct Android reception of original JPEGs after capture, including bursts.
+Preserve card originals and camera shooting settings.
+Target models: DC-S1RM2 and DC-S1M2.
+This diagnostic result applies ONLY to the DC-S1RM2 unit below.
+
+Test environment
+- Application: Cam Link 0.2.24, package hk.camlink.usb; separate diagnostic instrumentation.
+- Android handset: Sony XQ-BE72.
+- Camera model returned by UPnP: DC-S1RM2.
+- Camera firmware returned by UPnP: 1.60.
+- Topology: handset joined the camera's direct Wi-Fi access point.
+- Camera screen, as reported by the user: select this camera in the tethering software.
+
+Observed service responses
+- TCP 80, 443, 60606 and 50001: connection established.
+- Device descriptor: HTTP 200 from port 60606, /Lumix/Server0/ddd.
+- Manufacturer: Panasonic; modelName: LUMIX.
+- X_PTPPortNo: 15740; X_CamCapability: 00000007.
+- X_AdditionalFunction: CPRemoteView; X_CamCategory: MirrorlessILC.
+- TCP 15740: Java ConnectException; no PTP/IP session established.
+- GET /cam.cgi?mode=getstate: HTTP 404 over both HTTP and HTTPS.
+- HTTPS handshake: TLS 1.2 succeeded; GET / returned HTTP 403.
+- UPnP ContentDirectory service definition was readable and advertised Browse.
+- Read-only Browse (ObjectID 0, BrowseDirectChildren, RequestedCount 1):
+  HTTP 500, UPnP error 701, "No such object".
+
+Interpretation limits
+- Discovery and TLS reachability are not proof of successful application pairing.
+- Browse 701 does not establish that the card is empty or identify the authentication mechanism.
+- Phone Wi-Fi logs showed repeated remote DEAUTH_LEAVING around 123 seconds after connection.
+  Pairing timeout is a possible explanation, not a confirmed cause.
+- No vendor authentication commands, camera-setting changes, shutter commands,
+  photo deletions, or original-image downloads were performed by these diagnostics.
+- No successful wireless JPEG transfer or burst-reliability result is claimed.
+- This summary contains no camera/phone serial numbers, Wi-Fi credentials, account
+  identifiers, tokens, certificate fingerprint, or user photographs.
+
+Requested clarification
+Please identify the supported SDK/API or developer programme for the newer
+wireless tethering handshake and JPEG transfer on Android, including access terms.

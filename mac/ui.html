@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cam Link</title>
+<style>
+:root{--paper:#f4f6f8;--ink:#1c1e21;--gray:#8a9099;--soft:#fff;--photo:#45474a;--accent:#ff6b1a;--warm:#ff8430;--line:#e2e5ea;--faint:#babcc0}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--paper);color:var(--ink);font-family:"PingFang TC",".AppleSystemUIFont","Heiti TC","Microsoft JhengHei UI",sans-serif;-webkit-font-smoothing:antialiased}
+button,select,input{font:inherit;color:inherit}
+.app{height:100%;display:flex;flex-direction:column;min-width:1080px;min-height:780px}
+.head{height:68px;display:flex;align-items:center;gap:12px;padding:14px 28px 10px}
+.head img{width:40px;height:40px;object-fit:contain;image-rendering:auto}
+.head h1{margin:0;font-size:22px}
+.titles{display:flex;align-items:flex-start;gap:12px}
+.head .ver{color:var(--gray);font-size:14px;margin-top:8px}
+.stage{flex:1;min-height:0;display:grid;grid-template-columns:70% 30%;gap:16px;padding:4px 24px 16px}
+.left{min-height:0;display:grid;grid-template-rows:70% 30%;gap:12px}
+.photo{background:var(--photo);border-radius:22px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 28px rgba(28,30,33,.12)}
+.photo img{max-width:100%;max-height:100%;object-fit:contain}
+.photo .empty{text-align:center;color:var(--faint);font-size:16px}
+.photo .cam{width:64px;height:64px;border-radius:50%;background:#56585c;margin:0 auto 12px;position:relative}
+.photo .cam:before{content:"";position:absolute;left:18px;top:24px;width:28px;height:18px;border:1.6px solid #c6c8cc;border-radius:2px}
+.cap{position:absolute;left:0;right:0;bottom:0;height:34px;padding:0 14px;display:none;align-items:center;color:#faf6ee;background:rgba(20,20,20,.82)}
+.card,.setup,.files{background:var(--soft);border:1px solid var(--line);border-radius:18px;box-shadow:0 6px 28px rgba(28,30,33,.10)}
+.files{min-height:0;display:flex;flex-direction:column;padding:10px 16px 12px}
+.files h2{margin:0;font-size:15px}
+.filehead,.row{display:grid;grid-template-columns:72px 1fr 110px 88px 72px;gap:8px;font-size:13px}
+.filehead{color:var(--gray);padding:4px 0}
+.rows{flex:1;overflow:auto}
+.row{padding:4px 0;border-top:1px solid #f0f2f5}
+.none{flex:1;display:flex;align-items:center;justify-content:center;color:var(--gray)}
+.bar{display:flex;justify-content:space-between;align-items:center}
+.count{color:var(--gray);font-size:13px;font-weight:400}
+.right{min-height:0;display:flex;flex-direction:column}
+.card{padding:14px 16px}
+.kicker{display:flex;justify-content:space-between;color:var(--gray);font-size:13px}
+.metrics{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:12px 0 10px}
+.tile{border:1px solid var(--line);border-radius:14px;text-align:center;padding:8px 4px 6px;box-shadow:0 2px 8px rgba(28,30,33,.04)}
+.tile b{display:block;font-size:22px}
+.tile span{color:var(--gray);font-size:13px}
+.meter{height:4px;background:var(--line);border-radius:4px;overflow:hidden}
+.meter i{display:block;height:100%;width:0;background:var(--accent)}
+.now{margin:8px 0 0;font-size:13px;min-height:18px}
+.hint{margin:0;color:var(--gray);font-size:13px;min-height:18px}
+.facts{margin-top:8px}
+.facts div{display:flex;justify-content:space-between;align-items:center;min-height:28px;gap:12px}
+.facts em{color:var(--gray);font-style:normal;font-size:13px;flex:none}
+.facts button{border:0;background:transparent;text-align:right;padding:0;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.facts button.live{cursor:pointer}
+.facts button.hidden{color:var(--gray);cursor:pointer}
+.facts button code{font-family:ui-monospace,Menlo,Consolas,monospace}
+.qrbtn{width:100%;height:44px;margin-top:12px;border:1px solid var(--line);border-radius:12px;background:#fff;cursor:pointer}
+.spacer{flex:1}
+.setup{margin-top:16px;padding:14px 16px}
+label{display:block;color:var(--gray);font-size:13px;margin:8px 0 4px}
+label.folder{display:flex;justify-content:space-between}
+label.folder button{border:0;background:transparent;color:var(--accent);cursor:pointer;padding:0}
+select,input{width:100%;height:36px;border:1px solid var(--line);border-radius:8px;background:#fff;padding:0 8px}
+.path{display:grid;grid-template-columns:1fr 72px;gap:8px}
+.path button{border:1px solid var(--line);border-radius:10px;background:var(--paper);cursor:pointer}
+.run{margin-top:16px;height:52px;border:0;border-radius:18px;background:var(--warm);color:#fff;font-weight:700;cursor:pointer;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18'><circle cx='9' cy='9' r='9' fill='white'/><path d='M7 5 L13 9 L7 13 Z' fill='%23ff8430'/></svg>");background-repeat:no-repeat;background-position:calc(50% - 58px) center}
+.run.stop{background:var(--ink);background-image:none}
+.mask{position:fixed;inset:0;background:rgba(28,30,33,.28);display:none;align-items:center;justify-content:center}
+.dialog{width:380px;background:var(--paper);border-radius:16px;overflow:hidden}
+.dialog canvas{display:block;width:332px;height:332px;margin:24px;background:#fff}
+.dialog p{margin:0;padding:12px 16px 16px;text-align:center;color:var(--gray);font-size:13px}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="head"><img src="/logo" alt="Cam Link"><div class="titles"><h1>Cam Link</h1><div class="ver">電腦收相&nbsp;&nbsp;&nbsp;&nbsp;<span id="vernum">0.2.25</span></div></div></header>
+  <div class="stage">
+    <div class="left">
+      <div class="photo" id="photo"><div class="empty"><div class="cam"></div>等待第一張照片</div><div class="cap" id="cap"></div></div>
+      <section class="files">
+        <div class="bar"><h2>本輪檔案</h2><span class="count" id="count">共 0 個檔案</span></div>
+        <div class="filehead"><span>時間</span><span>檔名</span><span>大小</span><span>速度</span><span>狀態</span></div>
+        <div class="rows" id="rows"><div class="none">尚無傳輸紀錄</div></div>
+      </section>
+    </div>
+    <div class="right">
+      <section class="card">
+        <div class="kicker"><span>連線狀態</span><span id="state"></span></div>
+        <div class="metrics">
+          <div class="tile"><b id="verified">0</b><span>已核對</span></div>
+          <div class="tile"><b id="active">0</b><span>傳輸中</span></div>
+          <div class="tile"><b id="mb">0.0</b><span>MB</span></div>
+        </div>
+        <div class="meter"><i id="fill"></i></div>
+        <p class="now" id="current"></p>
+        <p class="hint" id="speed"></p>
+        <div class="facts">
+          <div><em>手機地址</em><button id="address" type="button">開始接收後顯示</button></div>
+          <div><em>配對碼</em><button id="code" type="button">—</button></div>
+          <div><em>指紋</em><button id="finger" type="button">與手機畫面上的 16 位比對</button></div>
+        </div>
+        <button class="qrbtn" id="qr" type="button">顯示 QR 掃描</button>
+      </section>
+      <section class="setup">
+        <label>這部電腦的網絡</label>
+        <select id="ips"></select>
+        <label class="folder">JPG 儲存資料夾<button id="open" type="button">開啟資料夾</button></label>
+        <div class="path"><input id="folder"><button id="browse" type="button">選擇</button></div>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:10px"><input id="auto" type="checkbox">開啟程式後自動開始接收</label>
+        <button class="qrbtn" id="rescan" type="button" style="margin-top:8px">補核對資料夾內 JPG</button>
+      </section>
+      <div class="spacer"></div>
+      <button class="run" id="run" type="button">開始接收</button>
+    </div>
+  </div>
+</div>
+<div class="mask" id="mask"><div class="dialog"><canvas id="qrc" width="332" height="332"></canvas><p id="qrhint"></p></div></div>
+<script>
+const $ = id => document.getElementById(id);
+let qrRows = null, pairCode = "", pairPrint = "";
+async function api(path, body){
+  const opt = body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)} : {};
+  const res = await fetch(path, opt);
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || "無法完成");
+  return data;
+}
+function paint(){
+  const live = qrRows && qrRows.length;
+  const show = !live || $("address").dataset.show === "1";
+  ["address","code","finger"].forEach(id => {
+    const el = $(id);
+    el.classList.toggle("live", !!live);
+    el.classList.toggle("hidden", !!live && !show);
+  });
+}
+function drawQR(rows){
+  const c = $("qrc"), g = c.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(0,0,c.width,c.height);
+  if(!rows || !rows.length){ g.fillStyle="#8a9099"; g.font="16px sans-serif"; g.textAlign="center"; g.fillText("請先按「開始接收」", c.width/2, c.height/2); return; }
+  const n = rows.length, quiet = 4, span = n + quiet*2, cell = Math.floor(Math.min(c.width,c.height)/span);
+  const x0 = Math.floor((c.width-cell*span)/2), y0 = Math.floor((c.height-cell*span)/2);
+  g.fillStyle = "#000";
+  for(let r=0;r<n;r++) for(let col=0;col<n;col++) if(rows[r][col]==="1") g.fillRect(x0+(col+quiet)*cell, y0+(r+quiet)*cell, cell, cell);
+}
+function render(s){
+  if(s.version) $("vernum").textContent = s.version;
+  $("verified").textContent = s.verified;
+  $("active").textContent = s.active;
+  $("mb").textContent = s.mb;
+  $("state").textContent = s.state || "";
+  $("current").textContent = s.current || "";
+  $("speed").textContent = s.speed || "";
+  $("fill").style.width = (s.progress||0) + "%";
+  const live = !!s.running;
+  const show = !live || !!s.revealed;
+  $("address").textContent = show ? (s.host || "開始接收後顯示") : "點擊顯示";
+  $("code").textContent = show ? (s.code || "—") : "點擊顯示";
+  $("finger").textContent = show ? (s.finger || "與手機畫面上的 16 位比對") : "點擊顯示";
+  $("address").dataset.show = show ? "1" : "0";
+  ["address","code","finger"].forEach(id => { $(id).classList.toggle("live", live); $(id).classList.toggle("hidden", live && !show); });
+  $("run").textContent = live ? "停止接收" : "開始接收";
+  $("run").classList.toggle("stop", live);
+  $("ips").disabled = $("folder").disabled = $("browse").disabled = live;
+  if(document.activeElement !== $("ips")){
+    const want = (s.ips||[]).join("\n");
+    if($("ips").dataset.list !== want){
+      const cur = $("ips").value;
+      $("ips").innerHTML = (s.ips||[]).map(ip => `<option>${ip}</option>`).join("");
+      if([...$("ips").options].some(o => o.value === cur)) $("ips").value = cur;
+      else if(s.ip) $("ips").value = s.ip;
+      $("ips").dataset.list = want;
+    }
+  }
+  if(document.activeElement !== $("folder")) $("folder").value = s.folder || "";
+  if(document.activeElement !== $("auto")) $("auto").checked = !!s.autoStart;
+  $("auto").disabled = live;
+  $("count").textContent = "共 " + (s.files||[]).length + " 個檔案";
+  const rows = $("rows");
+  if(!s.files || !s.files.length) rows.innerHTML = '<div class="none">尚無傳輸紀錄</div>';
+  else rows.innerHTML = s.files.map(f => `<div class="row" data-name="${f.name}" style="cursor:pointer"><span>${f.time}</span><span>${f.name}</span><span>${f.size}</span><span>${f.rate}</span><span>${f.status}</span></div>`).join("");
+  rows.querySelectorAll(".row[data-name]").forEach(el => el.onclick = async () => { try{ await api("/api/preview", {name: el.dataset.name}); tick(); }catch(e){} });
+  const photo = $("photo");
+  if(s.photo){
+    let img = photo.querySelector("img");
+    if(!img){ photo.innerHTML = '<img alt=""><div class="cap" id="cap"></div>'; img = photo.querySelector("img"); }
+    if(img.getAttribute("src") !== s.photo) img.src = s.photo;
+    const cap = $("cap"); cap.style.display = "flex"; cap.textContent = s.photoName || "";
+  }else if(!photo.querySelector(".empty")){
+    photo.innerHTML = '<div class="empty"><div class="cam"></div>等待第一張照片</div><div class="cap" id="cap"></div>';
+  }
+  qrRows = s.qr || null; pairCode = s.code || ""; pairPrint = s.finger || "";
+  if($("mask").style.display === "flex") { drawQR(qrRows); $("qrhint").textContent = live ? "用手機相機掃描，會開啟 Cam Link\n配對碼 "+pairCode+"    指紋 "+pairPrint : ""; }
+}
+async function tick(){ try{ render(await api("/api/state")); }catch(e){} }
+$("run").onclick = async () => {
+  try{
+    if($("run").classList.contains("stop")) await api("/api/stop", {});
+    else await api("/api/start", {ip:$("ips").value, folder:$("folder").value});
+    tick();
+  }catch(e){ alert(e.message); }
+};
+["address","code","finger"].forEach(id => $(id).onclick = async () => { try{ await api("/api/reveal", {}); tick(); }catch(e){} });
+$("qr").onclick = () => { if(!qrRows){ alert("請先按「開始接收」。"); return; } $("mask").style.display = "flex"; drawQR(qrRows); $("qrhint").innerText = "用手機相機掃描，會開啟 Cam Link\n配對碼 "+pairCode+"    指紋 "+pairPrint; };
+$("mask").onclick = e => { if(e.target.id === "mask") $("mask").style.display = "none"; };
+$("browse").onclick = async () => { try{ const s = await api("/api/browse", {}); if(s.folder) $("folder").value = s.folder; }catch(e){ if(e.message) alert(e.message); } };
+$("open").onclick = async () => { try{ await api("/api/open", {folder:$("folder").value}); }catch(e){ alert(e.message); } };
+$("auto").onchange = async () => { try{ await api("/api/auto", {on:$("auto").checked}); }catch(e){ alert(e.message); } };
+$("rescan").onclick = async () => { try{ await api("/api/rescan", {}); tick(); }catch(e){ alert(e.message); } };
+addEventListener("pagehide", () => navigator.sendBeacon("/api/quit"));
+api("/api/hello", {}).then(tick).catch(tick);
+setInterval(tick, 400);
+</script>
+</body>
+</html>

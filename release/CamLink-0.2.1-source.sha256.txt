@@ -1,0 +1,6 @@
+
+Algorithm : SHA256
+Hash      : DB5C5D26453AB8AF518791C451611A5B6939FB8891521885CA1CD3EBA08CF7E0
+Path      : C:\Projects\Cam Link\release\CamLink-0.2.1-source.zip
+
+

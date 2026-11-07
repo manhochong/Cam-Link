@@ -1,0 +1,35 @@
+Prepared: 2026-11-06 (Hong Kong)
+Status: DRAFT ONLY - NOT SENT
+Recipient: lumixsdkinfo@gg.jp.panasonic.com
+Subject: Developer access request: Android wireless tethering for DC-S1RM2 / DC-S1M2
+Suggested attachment: Panasonic-Wireless-Diagnostic-Summary.txt
+
+Dear LUMIX SDK team,
+
+I am developing Cam Link, an independent Android application for event photography. The intended workflow is to receive original JPEGs immediately after capture over Wi-Fi, retain a local copy, and upload them to Google Drive. Target cameras are the DC-S1RM2 and DC-S1M2. The application should connect directly, without requiring LUMIX Lab or LUMIX Tether to run alongside it.
+
+Could you advise whether developer access is available to the current encrypted wireless tethering protocol, an Android-compatible SDK, or a supported platform-independent API?
+
+The public SDK page lists Windows libraries with USB and selected Ethernet support. I have not found documentation for implementing the newer wireless tethering protocol on Android. I understand that the public beta SDK does not include technical support; this is an access/partnership enquiry, and a referral to the appropriate team would be appreciated.
+
+Specifically, I would like to confirm:
+
+1. Support for DC-S1RM2 firmware 1.60 and DC-S1M2, including minimum firmware requirements.
+2. Discovery, user-approved pairing, authentication, certificate handling, encrypted sessions, keep-alive and reconnection requirements.
+3. New-photo notifications and original JPEG retrieval during burst shooting, while retaining files on the camera card and avoiding changes to shooting settings.
+4. Support for both direct camera Wi-Fi and a shared wireless access point.
+5. Developer registration, NDA, fees, commercial distribution terms, and any Android SDK redistribution requirements.
+
+An attached summary describes read-only diagnostics on a DC-S1RM2 running firmware 1.60. The camera is reachable, but our standard PTP/IP prototype has not established a tethering session or received any JPEGs. We are seeking the supported integration path, not a way to bypass authentication.
+
+Thank you for your guidance or referral.
+
+Best regards,
+Cam Link developer
+
+-- Preparation notes (remove before sending) --
+Add your preferred personal/company signature if needed. No company affiliation has been assumed.
+Attach only Panasonic-Wireless-Diagnostic-Summary.txt initially, not the full workspace or phone logs.
+The recipient is published at:
+https://av.jpn.support.panasonic.com/support/global/cs/soft/tool/sdk.html
+The page notes that beta SDK usage/technical questions are unsupported and a reply is not guaranteed.

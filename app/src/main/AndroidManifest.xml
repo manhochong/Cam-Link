@@ -1,0 +1,57 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-feature android:name="android.hardware.usb.host" android:required="true" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <queries>
+        <package android:name="com.panasonic.jp.lumixlab"/>
+        <package android:name="com.dropbox.android"/>
+        <package android:name="com.box.android"/><package android:name="com.google.android.apps.photos"/>
+        <package android:name="com.yahoo.mobile.client.android.flickr"/>
+    </queries>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <application android:label="Cam Link" android:theme="@style/AppTheme" android:usesCleartextTraffic="false"
+        android:allowBackup="false" android:dataExtractionRules="@xml/data_extraction_rules" android:supportsRtl="true" android:icon="@mipmap/cam_link" android:roundIcon="@mipmap/cam_link">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" android:resource="@xml/device_filter" />
+        </activity>
+        <service android:name=".CaptureService" android:exported="false" android:foregroundServiceType="connectedDevice|dataSync" />
+        <activity android:name=".CloudActivity" android:exported="false" />
+        <activity android:name=".OneDriveActivity" android:exported="false" />
+        <activity android:name=".OneDriveCallback" android:exported="true" android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="camlink" android:host="onedrive" android:path="/callback" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".OneDriveLogin" android:exported="false" />
+        <activity android:name=".OtherClouds" android:exported="false" android:launchMode="singleTop" />
+        <activity android:name=".PairLink" android:exported="true" android:launchMode="singleTask" android:taskAffinity="hk.camlink.usb.pair" android:excludeFromRecents="true" android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="camlink" android:host="pair" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".ShootDetail" android:exported="false" />
+        <activity android:name=".SessionAlbum" android:exported="false" />
+        <service android:name=".DavBackup" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true"/>
+        <service android:name=".UploadService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".OneDriveService" android:exported="false" android:foregroundServiceType="dataSync" />
+    </application>
+</manifest>

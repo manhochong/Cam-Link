@@ -1,0 +1,18 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'hk.camlink.usb'
+    compileSdk 36
+    defaultConfig { applicationId 'hk.camlink.usb'; minSdk 29; targetSdk 35; versionCode 32; versionName '0.2.25'; testInstrumentationRunner 'hk.camlink.usb.CloudDeviceChecks' }
+    signingConfigs { localTest { storeFile rootProject.file('.build/usb-test.keystore'); storePassword 'android'; keyAlias 'usbtest'; keyPassword 'android' } }
+    buildTypes { debug { signingConfig signingConfigs.localTest }; release { signingConfig signingConfigs.localTest; minifyEnabled false } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    sourceSets { main { jniLibs.srcDirs = [rootProject.file('.build/native-libs')] } }
+    buildFeatures { buildConfig true }
+    testOptions { unitTests.returnDefaultValues = true }
+}
+dependencies {
+    implementation 'com.google.android.gms:play-services-auth:21.6.0'
+    implementation 'com.google.android.gms:play-services-code-scanner:16.1.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20180813'
+}
