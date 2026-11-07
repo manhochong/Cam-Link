@@ -132,7 +132,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
     private func finishDownload(
         key: String,
         error: (any Error)?,
-        options: [String: Any]
+        options: [AnyHashable: Any]?
     ) {
         let ctx = downloadContexts.removeValue(forKey: key)
         downloadSinks.removeValue(forKey: key)
@@ -146,7 +146,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
         knownHandles.insert(ctx.key)
         // We set saveAsFilename ourselves; prefer that path, fall back to framework key.
         var path = ctx.dest
-        if let saved = options["ICSavedFilename"] as? String, !saved.isEmpty {
+        if let saved = options?["ICSavedFilename"] as? String, !saved.isEmpty {
             path = ctx.dest.deletingLastPathComponent().appendingPathComponent(saved)
         }
         do {
@@ -194,18 +194,18 @@ private final class DownloadContext: NSObject {
     }
 }
 
-private final class DownloadSink: NSObject, ICCameraDeviceDownloadDelegate {
-    private let onDone: ((any Error)?, [String: Any]) -> Void
+/// Off-MainActor ObjC sink — signature must match latest ImageCaptureCore bridging.
+final class DownloadSink: NSObject, ICCameraDeviceDownloadDelegate {
+    private let onDone: ((Error?, [AnyHashable: Any]?) -> Void)
 
-    init(onDone: @escaping ((any Error)?, [String: Any]) -> Void) {
+    init(onDone: @escaping (Error?, [AnyHashable: Any]?) -> Void) {
         self.onDone = onDone
     }
 
-    // Match ImageCaptureCore ObjC selector; keep off MainActor (see CameraCaptureService).
-    func didDownloadFile(
+    @objc func didDownloadFile(
         _ file: ICCameraFile,
         error: Error?,
-        options: [String: Any],
+        options: [AnyHashable: Any]?,
         contextInfo: UnsafeMutableRawPointer?
     ) {
         onDone(error, options)
