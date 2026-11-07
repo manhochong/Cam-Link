@@ -19,6 +19,8 @@ final class CameraCaptureService: NSObject, ObservableObject {
     private var knownHandles = Set<String>()
     private let folder: URL
     private var downloading = Set<String>()
+    private var downloadSinks: [String: DownloadSink] = [:]
+    private var downloadContexts: [String: DownloadContext] = [:]
 
     override init() {
         let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -110,21 +112,32 @@ final class CameraCaptureService: NSObject, ObservableObject {
         ]
         status = "正在下載 \(safe)…"
         let ctx = DownloadContext(key: key, dest: dest, name: safe)
+        downloadContexts[key] = ctx
+        // Separate NSObject sink avoids @MainActor vs ImageCaptureCore protocol isolation errors.
+        let sink = DownloadSink { [weak self] error, opts in
+            Task { @MainActor in
+                self?.finishDownload(key: key, error: error, options: opts)
+            }
+        }
+        downloadSinks[key] = sink
         device.requestDownloadFile(
             file,
             options: options,
-            downloadDelegate: self,
-            didDownloadSelector: #selector(CameraCaptureService.didDownloadFile(_:error:options:contextInfo:)),
-            contextInfo: Unmanaged.passRetained(ctx).toOpaque()
+            downloadDelegate: sink,
+            didDownloadSelector: #selector(DownloadSink.didDownloadFile(_:error:options:contextInfo:)),
+            contextInfo: nil
         )
     }
 
     private func finishDownload(
-        ctx: DownloadContext,
+        key: String,
         error: (any Error)?,
         options: [String: Any]?
     ) {
-        downloading.remove(ctx.key)
+        let ctx = downloadContexts.removeValue(forKey: key)
+        downloadSinks.removeValue(forKey: key)
+        downloading.remove(key)
+        guard let ctx else { return }
         if let error {
             lastError = error.localizedDescription
             status = "下載失敗"
@@ -178,6 +191,23 @@ private final class DownloadContext: NSObject {
         self.key = key
         self.dest = dest
         self.name = name
+    }
+}
+
+private final class DownloadSink: NSObject, ICCameraDeviceDownloadDelegate {
+    private let onDone: ((any Error)?, [String: Any]?) -> Void
+
+    init(onDone: @escaping ((any Error)?, [String: Any]?) -> Void) {
+        self.onDone = onDone
+    }
+
+    @objc func didDownloadFile(
+        _ file: ICCameraFile,
+        error: (any Error)?,
+        options: [String: Any] = [:],
+        contextInfo: UnsafeMutableRawPointer?
+    ) {
+        onDone(error, options)
     }
 }
 
@@ -258,18 +288,3 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
     }
 }
 
-extension CameraCaptureService: ICCameraDeviceDownloadDelegate {
-    /// Matches ImageCaptureCore optional requirement (nonisolated for @MainActor class).
-    @objc nonisolated func didDownloadFile(
-        _ file: ICCameraFile,
-        error: (any Error)?,
-        options: [String: Any]?,
-        contextInfo: UnsafeMutableRawPointer?
-    ) {
-        guard let contextInfo else { return }
-        let ctx = Unmanaged<DownloadContext>.fromOpaque(contextInfo).takeRetainedValue()
-        Task { @MainActor in
-            self.finishDownload(ctx: ctx, error: error, options: options)
-        }
-    }
-}
