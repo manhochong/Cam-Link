@@ -17,6 +17,9 @@ targets:
       - path: CamLink
         excludes:
           - "**/*.md"
+    dependencies:
+      - sdk: ImageCaptureCore.framework
+      - sdk: UniformTypeIdentifiers.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: hk.camlink.ios
@@ -25,6 +28,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         DEVELOPMENT_TEAM: ""
+        SUPPORTS_MACCATALYST: "NO"
     info:
       path: CamLink/Info.plist
       properties:

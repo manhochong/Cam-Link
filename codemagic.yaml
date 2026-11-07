@@ -16,20 +16,22 @@ workflows:
         script: |
           cd ios
           xcodegen generate
-      - name: Build for iOS Simulator
+      - name: Build for iOS device (unsigned)
         script: |
           set -euo pipefail
+          # ImageCaptureCore is device-only; simulator SDK has no module.
           xcodebuild \
             -project ios/CamLink.xcodeproj \
             -scheme "$XCODE_SCHEME" \
-            -sdk iphonesimulator \
+            -sdk iphoneos \
             -configuration Debug \
-            -destination 'generic/platform=iOS Simulator' \
+            -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
             build
     artifacts:
-      - ios/build/**/*.app
-      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/Debug-iphonesimulator/*.app
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/Debug-iphoneos/*.app
     triggering:
       events:
         - push
