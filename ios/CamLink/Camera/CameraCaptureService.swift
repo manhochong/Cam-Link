@@ -252,7 +252,9 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
         }
     }
 
-    // Xcode latest ImageCaptureCore: cameraDevice(_:didAdd:) / didRemove: (Items labels are obsolete).
+    // Swift name from the SDK rename diagnostic:
+    // cameraDevice(_:didAddItems:) -> cameraDevice(_:didAdd:)
+    // cameraDevice(_:didRemoveItems:) -> cameraDevice(_:didRemove:)
     nonisolated func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) {
         Task { @MainActor in
             for item in items {
@@ -265,12 +267,6 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
     }
 
     nonisolated func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {}
-
-    nonisolated func cameraDevice(_ camera: ICCameraDevice, didAddItem item: ICCameraItem) {
-        cameraDevice(camera, didAdd: [item])
-    }
-
-    nonisolated func cameraDevice(_ camera: ICCameraDevice, didRemoveItem item: ICCameraItem) {}
 
     nonisolated func cameraDevice(_ camera: ICCameraDevice, didRenameItems items: [ICCameraItem]) {}
 
