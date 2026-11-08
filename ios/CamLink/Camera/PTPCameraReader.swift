@@ -74,10 +74,44 @@ enum PTPCodec {
     static let maxHandles = 1_000_000
     static let allowedOperations: Set<UInt16> = [0x1001, 0x1004, 0x1007, 0x1008, 0x1009]
 
-    struct Response {
+    struct Response: Sendable {
         let code: UInt16
         let transaction: UInt32
         let parameters: [UInt32]
+    }
+
+    struct Completion: Sendable {
+        let response: Response
+        let payload: Data
+        let responseSlot: String
+    }
+
+    /// The native callback has two unlabeled Data values. Identify a response
+    /// by its complete type-3 container, never by argument names or byte count
+    /// alone. If both buffers look like responses, fail rather than lose data.
+    static func completion(first: Data, second: Data, operation: UInt16, maxBytes: Int) throws -> Completion {
+        let firstResponse = try? response(first)
+        let secondResponse = try? response(second)
+        let reply: Response
+        let incoming: Data
+        let slot: String
+        switch (firstResponse, secondResponse) {
+        case (.some(let value), .none):
+            reply = value
+            incoming = second
+            slot = "first"
+        case (.none, .some(let value)):
+            reply = value
+            incoming = first
+            slot = "second"
+        case (.some, .some):
+            throw PTPReadError.malformed("ambiguous callback responses")
+        case (.none, .none):
+            throw PTPReadError.malformed("callback response container")
+        }
+        guard reply.code == 0x2001 else { throw PTPResponseError(code: reply.code) }
+        let incomingPayload = try payload(incoming, operation: operation, maxBytes: maxBytes)
+        return Completion(response: reply, payload: incomingPayload, responseSlot: slot)
     }
 
     static func command(operation: UInt16, transaction: UInt32, parameters: [UInt32] = []) throws -> Data {
@@ -99,7 +133,8 @@ enum PTPCodec {
         let type = try reader.uint16()
         let code = try reader.uint16()
         let transaction = try reader.uint32()
-        guard UInt64(length) == UInt64(data.count), type == 3, (data.count - 12) % 4 == 0 else {
+        guard UInt64(length) == UInt64(data.count), type == 3,
+              (0x2000...0x2FFF).contains(code), (data.count - 12) % 4 == 0 else {
             throw PTPReadError.malformed("response header")
         }
         var parameters: [UInt32] = []
@@ -445,12 +480,13 @@ final class PTPCameraReader {
                     guard let self, let gate, self.pending === gate, !gate.completed else { return }
                     self.invalidate(with: PTPReadError.timedOut(operation))
                 }
-                // Apple's completion order is RESPONSE FIRST, DATA SECOND.
                 // No outgoing data phase is used by any whitelisted operation.
-                camera.requestSendPTPCommand(command, outData: nil) { [weak self, weak gate] response, data, error in
+                // Keep native slots unlabeled until the codec validates which
+                // is the response; build 37 failed by assuming response-first.
+                camera.requestSendPTPCommand(command, outData: nil) { [weak self, weak gate] first, second, error in
                     guard let self, let gate else { return }
                     Task { @MainActor [self, gate] in
-                        self.finish(gate, response: response, data: data, error: error)
+                        self.finish(gate, first: first, second: second, error: error)
                     }
                 }
             }
@@ -469,25 +505,35 @@ final class PTPCameraReader {
         return bytes
     }
 
-    private func finish(_ gate: PendingCommand, response: Data, data: Data, error: Error?) {
+    private func finish(_ gate: PendingCommand, first: Data, second: Data, error: Error?) {
         guard pending === gate, !gate.completed, !unusable else { return } // one-shot; ignore late callbacks
         gate.completed = true
         gate.timeout?.cancel()
         gate.timeout = nil
         pending = nil // The driver callback has arrived; another command is now safe.
         let elapsed = (ProcessInfo.processInfo.systemUptime - gate.started) * 1000
-        let parsedResponse = try? PTPCodec.response(response)
-        let code = parsedResponse.map { String(format: "%04X", Int($0.code)) } ?? "malformed"
-        let responseTransaction = parsedResponse.map { String($0.transaction) } ?? "unknown"
-        trace(String(format: "PTP opcode=%04X response=%@ responseTransaction=%@ bytes=%d responseBytes=%d ms=%.0f", Int(gate.operation), code, responseTransaction, data.count, response.count, elapsed))
+        let firstReply = try? PTPCodec.response(first)
+        let secondReply = try? PTPCodec.response(second)
+        let firstCode = firstReply.map { String(format: "%04X", Int($0.code)) } ?? "not-response"
+        let secondCode = secondReply.map { String(format: "%04X", Int($0.code)) } ?? "not-response"
+        trace(String(format: "PTP_NATIVE opcode=%04X firstBytes=%d secondBytes=%d firstResponse=%@ secondResponse=%@ ms=%.0f", Int(gate.operation), first.count, second.count, firstCode, secondCode, elapsed))
         do {
-            let reply = try PTPCodec.response(response)
-            // Native ImageCaptureCore may rewrite the command transaction ID.
-            // Validate the response container and code, but do not require equality.
-            guard reply.code == 0x2001 else { throw PTPResponseError(code: reply.code) }
-            if let error { throw PTPReadError.transport(error.localizedDescription) }
-            let payload = try PTPCodec.payload(data, operation: gate.operation, maxBytes: gate.byteLimit)
-            gate.continuation.resume(returning: payload)
+            // Do not hide a transport failure behind "missing response" when
+            // the framework supplies empty callback buffers alongside NSError.
+            if let error, firstReply == nil, secondReply == nil {
+                let native = error as NSError
+                throw PTPReadError.transport("domain=\(native.domain) code=\(native.code)")
+            }
+            let result = try PTPCodec.completion(first: first, second: second,
+                operation: gate.operation, maxBytes: gate.byteLimit)
+            if let error {
+                let native = error as NSError
+                throw PTPReadError.transport("domain=\(native.domain) code=\(native.code)")
+            }
+            // Native ImageCaptureCore may rewrite transaction IDs. Validate
+            // the response/code, without comparing to the emitted transaction.
+            trace(String(format: "PTP opcode=%04X response=%04X responseTransaction=%u responseSlot=%@ bytes=%d ms=%.0f", Int(gate.operation), Int(result.response.code), result.response.transaction, result.responseSlot, result.payload.count, elapsed))
+            gate.continuation.resume(returning: result.payload)
         } catch {
             gate.continuation.resume(throwing: error)
         }

@@ -1,4 +1,4 @@
-# DC-S1RM2／iPad build 36 診斷判讀
+# DC-S1RM2／iPad USB 接收診斷：build 36–38
 
 使用者提供的 `CamLink-camera-diagnostics.txt` 顯示 App 0.2.25（36），iPadOS 26.5.2。三次相機權限及內容授權均成功，三次 `SESSION_OPEN` 均成功；三次 `BASELINE` 都是 0 個物件。日誌有 56 次 16-byte PTP 事件，但沒有 `ITEMS_ADDED` 或 `DOWNLOAD_BEGIN`。
 
@@ -6,7 +6,7 @@
 
 Android 會重新執行標準 PTP 的 GetStorageIDs／GetObjectHandles；對 LUMIX 的 ObjectAdded 事件，還會用事件攜帶的 handle 取得 ObjectInfo 和 Object。iOS build 36 的 timer、重試按鈕與 PTP 事件回呼只重新讀取 ImageCaptureCore 的既有目錄；當目錄一直是空的，就無法建立任何下載工作。這是已確認的應用程式層差異，不是已證明的 Panasonic 私有協定或韌體問題。
 
-Apple 的 `requestSendPTPCommand` 在 iOS／iPadOS 13 起可用。回呼參數順序是 response、data、error。可以利用此原生介面實作標準唯讀物件查詢，繼續由 ImageCaptureCore 管理 USB 連線與 session。[1] PTP 事件回呼本身只提供事件資料，不能把收到事件直接等同於已有 ICCameraFile。[2]
+Apple 的 `requestSendPTPCommand` 在 iOS／iPadOS 13 起可用，completion 型別是兩份沒有參數標籤的 `Data` 與 error。官方 discussion 以 response、data 描述；先前版本據此硬認第一份是 response，但 build 37 的實機長度顯示這個 adapter 假設不可靠。build 38 改為嚴格驗證哪份是完整 type-3 response，再把另一份作 payload，而非單純根據長度交換。原生介面仍只用於標準唯讀物件查詢，USB 連線與 session 由 ImageCaptureCore 管理。[1] PTP 事件回呼本身只提供事件資料，不能把收到事件直接等同於已有 ICCameraFile。[2]
 
 Apple 的 `requestEnableTethering()` 僅適用 macOS，不能拿來解決 iPad 問題。`tetheredCaptureEnabled` 是可讀狀態，不是 iPad 上可任意設定的開關。[3] Panasonic 的 DC-S1RM2 指南記錄 PC(Tether) 與 LUMIX Tether 的 PC 使用流程，但並未保證 iPad 原生目錄會採用同一方式更新。[4]
 
@@ -15,6 +15,16 @@ Apple 的 `requestEnableTethering()` 僅適用 macOS，不能拿來解決 iPad �
 多雲端傳送也是未完成的移植範圍：build 36 只有本機保存與電腦 Receiver。build 37 已加入 WebDAV 上傳／讀回核對及批量系統分享，但 Google Drive／OneDrive 直接登入仍需原生 OAuth 設定；不能以無效按鈕冒充 Android 功能相等。
 
 2026-11-08 Codemagic smoke `6af039d024e1ec2375577094` 已在 Mac runner 完成 `PTPCodecChecks: 431 offline checks passed; no camera operations performed.`，並完成 iPhone SDK unsigned 編譯。完整候選 build 37 的 Codemagic 建置 `6af03b8f24e1ec237557710f` 亦已通過 codec 測試、所有新 Swift 檔案的 Apple SDK 編譯、簽名 IPA 匯出和最終 metadata 檢查，Apple uploader 回覆 `UPLOAD SUCCEEDED with no errors`。App Store Connect 已處理完成，build 37 為 `Testing`，已加入 `CamLink Internal`。可在 TestFlight 更新至 `0.2.25 (37)`；沒有 USB 硬體或 WebDAV 遠端實測，仍需使用者驗證。
+
+## build 37 實機回報與 build 38 修正
+
+2026-11-08 09:15:52 UTC，DC-S1RM2 原生 session 已開啟，完整 native 目錄仍是空的，控制／PTP 授權也為 Authorized。程式已成功選擇 PTP fallback，但第一次 `GetDeviceInfo`，opcode `1001`，在約 4 ms 回傳後立即停止：`bytes=12 responseBytes=235`，錯誤 `Malformed or truncated PTP response length`。這不是使用者拒絕權限，也尚未到電腦上傳階段。
+
+build 37 的 adapter 把 callback 第一份 235 bytes 當 response，第二份 12 bytes 當 data。嚴格 PTP response container 應是 12–32 bytes，因此第一關一定失敗。這些長度符合「資料在第一份，response 在第二份」的情況；報告未附兩份完整原始內容，所以新版還會用 header 及 response code 驗證這個判讀，不能只依長度交換或跳過驗證。先前 431 項檢查覆蓋 codec，沒有測到 native adapter 的 callback 配對，這個缺陷屬於 App，而非使用者操作。
+
+build 38 的同一 normalizer 用於實際 adapter 和回歸測試。只有一份完整、type-3、標準 response-code 範圍的 response 才接受；兩份都像 response 或兩份皆不合法均拒絕。response 錯誤碼不會被 payload 大小或空資料遮住。保留 byte cap、完整資料／JPG 檢查、序列佇列與逾時保護。新增 `PTP_NATIVE firstBytes／secondBytes／firstResponse／secondResponse` 與 `responseSlot` 日誌，不輸出照片內容或相機序號。
+
+後續 `C101`、`C107`、`C104` 是廠商事件，這份報告不含標準 `4002` ObjectAdded。其參數不可直接當 JPG handle。修正首個查詢後，再以 fresh inventory 與標準查詢結果確認相機是否暴露新照片；目前不據此增加廠商寫入、拍攝或屬性命令。build 38 尚待雲端編譯、TestFlight 指派及實機驗證。
 
 ## 其他相機的支援範圍
 

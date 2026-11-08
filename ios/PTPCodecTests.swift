@@ -27,6 +27,19 @@ enum PTPCodecChecks {
         throw Failure(description: "FAIL: \(label): accepted malformed input")
     }
 
+    static func expectResponseError(_ label: String, code: UInt16 = 0x2019, _ body: () throws -> Void) throws {
+        do { try body() }
+        catch let error as PTPResponseError {
+            guard error.code == code else {
+                throw Failure(description: "FAIL: \(label): unexpected response code \(error.code)")
+            }
+            checks += 1
+            return
+        }
+        catch { throw Failure(description: "FAIL: \(label): unexpected error \(error)") }
+        throw Failure(description: "FAIL: \(label): accepted error response")
+    }
+
     static func u16(_ values: [UInt16]) -> Data {
         var result = Data()
         for value in values { PTPCodec.append(value, to: &result) }
@@ -57,9 +70,9 @@ enum PTPCodecChecks {
         u32([UInt32(12 + data.count)]) + u16([type, code]) + u32([transaction]) + data
     }
 
-    static func deviceDataset() -> Data {
+    static func deviceDataset(vendorDescription: String = "LUMIX") -> Data {
         var data = u16([100]) + u32([0x00000006]) + u16([100])
-        data += string("LUMIX")
+        data += string(vendorDescription)
         data += u16([0])
         data += array16([0x1001, 0x1004, 0x1007, 0x1008, 0x1009, 0x1009])
         data += array16([0x4002, 0x4003])
@@ -211,7 +224,7 @@ enum PTPCodecChecks {
     static func checkResponsesAndEvents() throws {
         let ok = container(type: 3, code: 0x2001, transaction: 991, data: u32([56, 77]))
         let response = try PTPCodec.response(ok)
-        try expect(response.code == 0x2001 && response.transaction == 991 && response.parameters == [56, 77], "response-first header and rewritten transaction parsed")
+        try expect(response.code == 0x2001 && response.transaction == 991 && response.parameters == [56, 77], "response header and rewritten transaction parsed")
         for code in [UInt16(0x2006), 0x2009, 0x2019] {
             try expect(try PTPCodec.response(container(type: 3, code: code)).code == code, "error response preserved \(code)")
             let error = PTPResponseError(code: code)
@@ -242,6 +255,123 @@ enum PTPCodecChecks {
         try expect(PTPCodec.event(container(type: 3, code: 0x4002)) == nil, "event wrong type")
         try expect(PTPCodec.event(container(type: 4, code: 0x2001)) == nil, "event wrong code range")
         try expect(PTPCodec.event(container(type: 4, code: 0x4002, data: u32([1, 2, 3, 4]))) == nil, "event max three params")
+    }
+
+    static func checkNativeCompletion() throws {
+        let ok = container(type: 3, code: 0x2001, transaction: 991)
+        // Synthetic, fully parsed DeviceInfo: only the 235/12-byte callback shape
+        // comes from the build 37 report. These are not camera raw-trace contents.
+        // Its bounded vendor-description field supplies the length, not trailing bytes.
+        let device = deviceDataset(vendorDescription: "BUILD37 SHAPE ONLY: SYNTHETIC PTP FIXTURE")
+        try expect(device.count == 235 && ok.count == 12, "synthetic build 37 report byte shape, not real trace contents")
+        let dataFirst = try PTPCodec.completion(first: device, second: ok, operation: 0x1001, maxBytes: 235)
+        try expect(dataFirst.responseSlot == "second", "235-byte DeviceInfo first, 12-byte response second")
+        try expect(dataFirst.payload == device, "data-first DeviceInfo payload preserved exactly")
+        try expect(dataFirst.response.code == 0x2001 && dataFirst.response.transaction == 991 && dataFirst.response.parameters.isEmpty, "data-first response fields")
+        let nativeDevice = try PTPCodec.deviceInfo(dataFirst.payload)
+        try expect(nativeDevice.manufacturer == "Panasonic" && nativeDevice.model == "DC-S1RM2" && nativeDevice.version == "1.2" && nativeDevice.operations == PTPCodec.allowedOperations, "normalized data-first DeviceInfo exact dataset decode")
+
+        let responseFirst = try PTPCodec.completion(first: ok, second: device, operation: 0x1001, maxBytes: 235)
+        try expect(responseFirst.responseSlot == "first", "legacy response-first callback selected structurally")
+        try expect(responseFirst.payload == device, "legacy DeviceInfo payload preserved exactly")
+        try expect(try PTPCodec.deviceInfo(responseFirst.payload).model == "DC-S1RM2", "normalized legacy DeviceInfo decode")
+
+        let jpeg = Data([0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x04, 0x50, 0x54, 0xFF, 0xD9])
+        let wrappedJPEG = container(type: 2, code: 0x1009, transaction: 123, data: jpeg)
+        let handleBytes = array32([56, 77, UInt32.max])
+        let wrappedHandles = container(type: 2, code: 0x1007, transaction: 123, data: handleBytes)
+        let objectBytes = objectDataset()
+        let wrappedObjectInfo = container(type: 2, code: 0x1008, transaction: 123, data: objectBytes)
+        let busy = container(type: 3, code: 0x2019)
+        let tooLarge = Data(repeating: 0, count: PTPCodec.metadataLimit + 13)
+        for responseIsFirst in [false, true] {
+            let slot = responseIsFirst ? "first" : "second"
+            func normalize(_ bytes: Data, operation: UInt16, budget: Int) throws -> PTPCodec.Completion {
+                try PTPCodec.completion(first: responseIsFirst ? ok : bytes, second: responseIsFirst ? bytes : ok, operation: operation, maxBytes: budget)
+            }
+            let empty = try normalize(Data(), operation: 0x1009, budget: 1)
+            try expect(empty.payload.isEmpty && empty.responseSlot == slot && empty.response.code == 0x2001, "empty GetObject data with OK in \(slot) slot")
+            let wrappedEmpty = try normalize(container(type: 2, code: 0x1009), operation: 0x1009, budget: 1)
+            try expect(wrappedEmpty.payload.isEmpty && wrappedEmpty.responseSlot == slot, "wrapped empty GetObject data, response \(slot)")
+            for bytes in [jpeg, wrappedJPEG] {
+                let object = try normalize(bytes, operation: 0x1009, budget: jpeg.count)
+                try expect(object.payload == jpeg && object.responseSlot == slot, "JPEG bytes unchanged after native normalization, input \(bytes.count) bytes, response \(slot)")
+            }
+            let handles = try normalize(wrappedHandles, operation: 0x1007, budget: handleBytes.count)
+            try expect(handles.responseSlot == slot && handles.payload == handleBytes, "wrapped GetHandles normalized, response \(slot)")
+            try expect(try PTPCodec.handles(handles.payload) == [56, 77, UInt32.max], "normalized GetHandles fed to exact dataset codec, response \(slot)")
+            let objectInfo = try normalize(wrappedObjectInfo, operation: 0x1008, budget: objectBytes.count)
+            try expect(objectInfo.responseSlot == slot && objectInfo.payload == objectBytes, "wrapped ObjectInfo normalized, response \(slot)")
+            let decodedObject = try PTPCodec.objectInfo(objectInfo.payload, handle: 56)
+            try expect(decodedObject.handle == 56 && decodedObject.name == "写真📷.JPG" && decodedObject.size == Int64(0xF1234567) && decodedObject.width == 9520 && decodedObject.height == 6336, "normalized ObjectInfo fed to exact dataset codec, response \(slot)")
+
+            for bytes in [Data(), Data([1]), tooLarge] {
+                try expectResponseError("DeviceBusy wins over absent, malformed or oversized payload \(bytes.count) bytes, response \(slot)") {
+                    _ = try PTPCodec.completion(first: responseIsFirst ? busy : bytes, second: responseIsFirst ? bytes : busy, operation: 0x1001, maxBytes: 1)
+                }
+            }
+            try expectResponseError("DeviceBusy wins over zero payload budget, response \(slot)") {
+                _ = try PTPCodec.completion(first: responseIsFirst ? busy : Data(), second: responseIsFirst ? Data() : busy, operation: 0x1001, maxBytes: 0)
+            }
+            for bytes in [jpeg, wrappedJPEG] {
+                try rejects("native GetObject over budget \(bytes.count) bytes, response \(slot)") {
+                    _ = try normalize(bytes, operation: 0x1009, budget: jpeg.count - 1)
+                }
+            }
+            for budget in [0, -1] {
+                try rejects("native OK payload invalid budget \(budget), response \(slot)") {
+                    _ = try normalize(jpeg, operation: 0x1009, budget: budget)
+                }
+            }
+        }
+
+        let rewritten = container(type: 3, code: 0x2001, transaction: UInt32.max, data: u32([1, 2, 3, 4, 5]))
+        let rewrittenCompletion = try PTPCodec.completion(first: wrappedJPEG, second: rewritten, operation: 0x1009, maxBytes: jpeg.count)
+        try expect(rewrittenCompletion.responseSlot == "second" && rewrittenCompletion.response.transaction == UInt32.max && rewrittenCompletion.response.parameters == [1, 2, 3, 4, 5] && rewrittenCompletion.payload == jpeg, "32-byte response, five parameters and rewritten transaction independent of data transaction")
+        for code in [UInt16(0x2000), 0x2006, 0x2009, 0x2FFF] {
+            let reply = container(type: 3, code: code)
+            try expectResponseError("non-OK response range code \(code) preserved before payload validation", code: code) {
+                _ = try PTPCodec.completion(first: tooLarge, second: reply, operation: 0x1001, maxBytes: 1)
+            }
+        }
+        try rejects("two OK responses are ambiguous, not an empty data phase") {
+            _ = try PTPCodec.completion(first: ok, second: ok, operation: 0x1009, maxBytes: 1)
+        }
+        try rejects("OK and DeviceBusy responses are ambiguous") {
+            _ = try PTPCodec.completion(first: ok, second: busy, operation: 0x1009, maxBytes: 1)
+        }
+        try rejects("two DeviceBusy responses are ambiguous before response-code handling") {
+            _ = try PTPCodec.completion(first: busy, second: busy, operation: 0x1009, maxBytes: 1)
+        }
+        try rejects("missing response in both empty callback slots") {
+            _ = try PTPCodec.completion(first: Data(), second: Data(), operation: 0x1009, maxBytes: 1)
+        }
+        try rejects("neither callback slot is a response") {
+            _ = try PTPCodec.completion(first: jpeg, second: wrappedJPEG, operation: 0x1009, maxBytes: jpeg.count)
+        }
+        var wrongLength = ok
+        wrongLength[0] = 16
+        let invalidResponses: [(String, Data)] = [
+            ("short header", Data(ok.prefix(11))),
+            ("declared length mismatch", wrongLength),
+            ("command type", container(type: 1, code: 0x2001)),
+            ("data type", container(type: 2, code: 0x2001)),
+            ("event type", container(type: 4, code: 0x2001)),
+            ("code below response range", container(type: 3, code: 0x1FFF)),
+            ("code above response range", container(type: 3, code: 0x3000)),
+            ("operation code, not response code", container(type: 3, code: 0x1001)),
+            ("unaligned parameters", container(type: 3, code: 0x2001, data: Data([1]))),
+            ("six parameters exceed 32 bytes", container(type: 3, code: 0x2001, data: u32([1, 2, 3, 4, 5, 6]))),
+            ("trailing bytes", ok + Data([0]))
+        ]
+        for (label, bytes) in invalidResponses {
+            try rejects("native malformed response first: \(label)") {
+                _ = try PTPCodec.completion(first: bytes, second: Data(), operation: 0x1009, maxBytes: 100)
+            }
+            try rejects("native malformed response second: \(label)") {
+                _ = try PTPCodec.completion(first: Data(), second: bytes, operation: 0x1009, maxBytes: 100)
+            }
+        }
     }
 
     static func checkPayloads() throws {
@@ -283,6 +413,7 @@ enum PTPCodecChecks {
         try checkReaders()
         try checkDatasets()
         try checkResponsesAndEvents()
+        try checkNativeCompletion()
         try checkPayloads()
         print("PTPCodecChecks: \(checks) offline checks passed; no camera operations performed.")
     }
