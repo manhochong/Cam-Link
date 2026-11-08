@@ -13,6 +13,8 @@ build 33 已由使用者回報無法從相機收到照片，而且介面不對�
 
 build 35 雖成功上傳，Apple 後續處理以 `90683` 指出封裝檔缺少相機用途說明。build 36 改為直接使用已提交的 Info.plist，不讓 XcodeGen 覆寫用途與 QR Scheme，並在 CI 驗證最終 IPA 的這些欄位。`python3 ios/verify_metadata.py <Info.plist 或 IPA 路徑>` 可重用此檢查。
 
+2026-11-08 已完成 build 36 合規聲明及 `CamLink Internal` 指派，App Store Connect 顯示 `Testing`。在 iPad 開啟 TestFlight，選 Cam Link 並更新，確認版本為 `0.2.25 (36)`；若未立即看到，重新開啟 TestFlight，或在 App 詳情的 Previous Builds 選取此 build。先測「接收卡內 JPG」，再測新拍接收，兩者模式不同。
+
 在「傳送」→「配對／更改電腦」→「掃描電腦 QR Code」掃描 Windows 或 Mac Receiver 的配對 QR，或用系統相機掃描後開啟 Cam Link。QR 只預填電腦地址與配對碼；仍需按「探測並顯示指紋」，核對與接收器畫面相同後完成配對。iPad 不需要使用 Mac 作為接收電腦，Windows Receiver 也使用相同的配對與 HTTPS 協定。
 
 首頁的「開始接收新拍 JPG」會在完整目錄就緒後略過既有照片，等待新拍的 JPG。「接收卡內 JPG」才會匯入記憶卡原有 JPG；重新連接要補收未完成照片時請選這個模式。同名且相同 SHA-256 的本機照片不會重複加入。按「停拍並完成接收」會先完成已排入佇列的檔案；請保持相機接線，直到顯示已停止。
@@ -37,12 +39,16 @@ build 35 雖成功上傳，Apple 後續處理以 `90683` 指出封裝檔缺少�
 
 建置成功並經 App Store Connect 處理後，受邀使用者在 iPhone 安裝 TestFlight App，並從邀請郵件接受 Cam Link 內部測試邀請。此流程不需要登記 UDID，也不是 App Store 公開上架；TestFlight 建置可測試 90 天。不要把憑證、私鑰、`.p8` API key 或 profile 加入 Git。
 
+2026-11-08 使用者已授權 build 36 的出口合規答覆，以及將 `ITSAppUsesNonExemptEncryption = false` 加入已提交的 Info.plist。此旗標適用於維持現行實作的後續版本：iOS 系統提供 TLS／Keychain，CryptoKit 僅作 SHA-256 雜湊，沒有額外實作問卷列出的加密演算法。若日後加入或改動加密，必須重新評估聲明；`false` 並非宣稱 App 完全不使用加密。已上傳 build 36 仍由 App Store Connect 的合規問卷處理，原始碼旗標不會修改已上傳二進位檔。
+
+後續簽名上傳須使用未上傳過的新 build 編號；不要直接重跑 build 36。修改 `project.yml` 的 `CURRENT_PROJECT_VERSION` 後再啟動 `ios-testflight-internal`。
+
 ## 相機與接收器實機驗收
 
 編譯後的 signed build 安裝到 iPhone/iPad，再依次確認：
 
 - [ ] USB 接上相機，允許存取後可發現相機並顯示裝置名稱。
-- [ ] 相機設為 PC(Tether)，已有 JPG 能下載到本場列表。
+- [ ] 相機使用已確認相容的 USB 模式，選「接收卡內 JPG」後，已有 JPG 能下載到本場列表。
 - [ ] 新拍一張 JPG 後，App 能收到且不會因檔名重複而覆蓋。
 - [ ] 關閉再重開 App，本場照片和待傳／已核對狀態仍在。
 - [ ] 配對時顯示的伺服器指紋與 Receiver 畫面相同。

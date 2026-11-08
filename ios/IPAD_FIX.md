@@ -28,7 +28,9 @@ build 35 已成功編譯、簽名及上傳（工作 `6af02e3924e1ec2375576d8e`�
 
 最新候選改為 build 36。已移除 XcodeGen 的 Info.plist 生成區塊，保留已提交的 plist 作為單一來源。新增 `verify_metadata.py`，在 XcodeGen 後及最終簽名 IPA 中驗證相機／區網用途說明與 QR Scheme；缺少任一項會在上傳前直接讓 CI 失敗。這解決已確認的封裝問題，不代表已驗證 USB 相機硬件。
 
-build 36 工作 `6af030eb24e1ec2375576e3c` 已完成 Apple SDK 編譯、簽名與上傳，最終 IPA metadata 日誌顯示 `PASS: camera/local-network purpose strings and camlink URL scheme are present`。2026-11-08 App Store Connect Build Uploads 顯示 `Complete`；build 狀態為 `Missing Compliance`，尚未加入內部群組。出口合規答覆須由使用者確認授權後才能提交。實機相機收檔與 UI 驗收仍未完成。
+build 36 工作 `6af030eb24e1ec2375576e3c` 已完成 Apple SDK 編譯、簽名與上傳，最終 IPA metadata 日誌顯示 `PASS: camera/local-network purpose strings and camlink URL scheme are present`。2026-11-08 App Store Connect Build Uploads 顯示 `Complete`。使用者明確授權後，已提交「None of the algorithms mentioned above」合規答覆，並將 build 36 加入 `CamLink Internal`。TestFlight 列表已確認 `Testing`，群組有 1 位測試者；App 內的 TestFlight 測試說明也已加入繁體中文操作及診斷提示。實機相機收檔與 UI 驗收仍未完成。
+
+使用者亦授權把 `ITSAppUsesNonExemptEncryption = false` 加入原始碼 Info.plist，適用於維持目前加密實作的後續版本；若改動加密須重新評估。此原始碼修改不會替換已上傳的 build 36。已可在 iPad 的 TestFlight 更新至 `0.2.25 (36)`，先測試「接收卡內 JPG」，再測試「開始接收新拍 JPG」。
 
 ## 查驗來源
 

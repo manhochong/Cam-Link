@@ -31,11 +31,13 @@
 			<string>Viewer</string>
 		</dict>
 	</array>
-	<key>LSRequiresIPhoneOS</key>
-	<true/>
-	<key>NSCameraUsageDescription</key>
-	<string>Cam Link 使用相機掃描電腦配對 QR，並授權 USB 外接相機 JPG 匯入；不會儲存掃描畫面、拍攝或刪除外接相機內的照片。</string>
-	<key>NSLocalNetworkUsageDescription</key>
+		<key>LSRequiresIPhoneOS</key>
+		<true/>
+		<key>ITSAppUsesNonExemptEncryption</key>
+		<false/>
+		<key>NSCameraUsageDescription</key>
+		<string>Cam Link 使用相機掃描電腦配對 QR，並授權 USB 外接相機 JPG 匯入；不會儲存掃描畫面、拍攝或刪除外接相機內的照片。</string>
+		<key>NSLocalNetworkUsageDescription</key>
 	<string>Cam Link 需要同一 Wi-Fi 連接電腦上的接收器。</string>
 	<key>UILaunchScreen</key>
 	<dict/>
