@@ -70,7 +70,7 @@ enum PcClient {
     /// TLS handshake to read server cert SHA-256 (same as Android PcLink.probe).
     static func probeFingerprint(base: String) async throws -> String {
         guard let url = URL(string: base) else { throw PcClientError.badIP }
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
             let box = ProbeBox(cont)
             var request = URLRequest(url: url, timeoutInterval: 8)
             request.httpMethod = "HEAD"
