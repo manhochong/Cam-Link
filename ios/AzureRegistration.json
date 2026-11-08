@@ -1,0 +1,69 @@
+{
+  "id": "d1a7fad7-308a-401c-bea4-f4eb98802092",
+  "appId": "16437f88-79e4-499f-8cb3-7f07c9146e0c",
+  "displayName": "Cam Link iOS",
+  "createdDateTime": "2026-11-08T16:02:42Z",
+  "publisherDomain": "gonfoliocontactgmail.onmicrosoft.com",
+  "signInAudience": "AzureADandPersonalMicrosoftAccount",
+  "publicClient": {
+    "redirectUris": [
+      "msauth.hk.camlink.ios://auth"
+    ]
+  },
+  "requiredResourceAccess": [
+    {
+      "resourceAppId": "00000003-0000-0000-c000-000000000000",
+      "resourceAccess": [
+        {
+          "id": "5c28f0bf-8a70-41f1-8ab2-9032436ddb65",
+          "type": "Scope"
+        },
+        {
+          "id": "7427e0e9-2fba-42fe-b0c0-848c9e6a8182",
+          "type": "Scope"
+        },
+        {
+          "id": "37f7f235-527c-4136-accd-4a02d197296e",
+          "type": "Scope"
+        },
+        {
+          "id": "14dad69e-099b-42c9-810b-d002981feec1",
+          "type": "Scope"
+        },
+        {
+          "id": "e1fe6dd8-ba31-4d61-89e7-88639da4683d",
+          "type": "Scope"
+        }
+      ]
+    }
+  ],
+  "api": {
+    "acceptMappedClaims": null,
+    "knownClientApplications": [],
+    "requestedAccessTokenVersion": 2,
+    "oauth2PermissionScopes": [],
+    "preAuthorizedApplications": []
+  },
+  "web": {
+    "homePageUrl": null,
+    "logoutUrl": null,
+    "redirectUris": [],
+    "implicitGrantSettings": {
+      "enableAccessTokenIssuance": false,
+      "enableIdTokenIssuance": false
+    },
+    "redirectUriSettings": []
+  },
+  "spa": {
+    "redirectUris": []
+  },
+  "isFallbackPublicClient": null,
+  "tenantID": "0051d77d-2447-4003-8059-01970cdfbed6",
+  "delegatedScopes": [
+    "openid",
+    "profile",
+    "offline_access",
+    "User.Read",
+    "Files.ReadWrite"
+  ]
+}

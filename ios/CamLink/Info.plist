@@ -30,15 +30,39 @@
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>hk.camlink.ios.google</string>
+			<key>CFBundleURLSchemes</key>
+			<array><string>com.googleusercontent.apps.518900347391-4fh5i9n3q2jpgh70aujo6ofs1i715dqu</string></array>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>hk.camlink.ios.microsoft</string>
+			<key>CFBundleURLSchemes</key>
+			<array><string>msauth.hk.camlink.ios</string></array>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+		</dict>
 	</array>
+		<key>GIDClientID</key>
+		<string>518900347391-4fh5i9n3q2jpgh70aujo6ofs1i715dqu.apps.googleusercontent.com</string>
+		<key>CamLinkMicrosoftClientID</key>
+		<string>16437f88-79e4-499f-8cb3-7f07c9146e0c</string>
+		<key>CamLinkMicrosoftRedirectURI</key>
+		<string>msauth.hk.camlink.ios://auth</string>
 		<key>LSRequiresIPhoneOS</key>
-		<true/>
-		<key>ITSAppUsesNonExemptEncryption</key>
-		<false/>
-		<key>NSCameraUsageDescription</key>
-		<string>Cam Link 使用相機掃描電腦配對 QR，並授權 USB 外接相機 JPG 匯入；不會儲存掃描畫面、拍攝或刪除外接相機內的照片。</string>
-		<key>NSLocalNetworkUsageDescription</key>
+	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>Cam Link 使用相機掃描電腦配對 QR，並授權 USB 外接相機 JPG 匯入；不會儲存掃描畫面、拍攝或刪除外接相機內的照片。</string>
+	<key>NSLocalNetworkUsageDescription</key>
 	<string>Cam Link 需要同一 Wi-Fi 連接電腦上的接收器。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>只有你選擇「儲存到照片」時，Cam Link 才會將已接收的 JPG 原始檔加入 iPad 或 iPhone 的照片圖庫；不會讀取或刪除其他照片。</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

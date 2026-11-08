@@ -20,6 +20,8 @@ final class CameraCaptureService: NSObject, ObservableObject {
     @Published var cameraName = ""
     @Published var browsing = false
     @Published var connected = false
+    @Published private(set) var sessionClosing = false
+    @Published private(set) var canStart = true
     @Published var catalogReady = false
     @Published var finishing = false
     @Published var lastError = ""
@@ -32,7 +34,22 @@ final class CameraCaptureService: NSObject, ObservableObject {
     @Published var mode: ReceiveMode = .newPhotos
 
     var onJPEG: ((ReceivedJPEG) -> Void)?
-    private let browser = ICDeviceBrowser()
+    /// Applied only when a new session starts; cannot mutate an active receiver's mode.
+    var scanIntervalSeconds: TimeInterval = 2
+    private var sessionScanInterval: TimeInterval = 2
+    // Retain the old context/delegate until real closure or physical removal.
+    private final class SessionContext {
+        let token: UUID
+        let browserID = UUID()
+        let browser = ICDeviceBrowser()
+        var camera: ICCameraDevice?
+        var cameraID: UUID?
+        var delegate: CameraSessionDelegate?
+        init(token: UUID) { self.token = token }
+    }
+    private var session: SessionContext?
+    private var lifecycle = CameraLifecycle()
+    private var closeTimer: Timer?
     private var camera: ICCameraDevice?
     private var generation = UUID()
     private var known = Set<String>()
@@ -63,16 +80,26 @@ final class CameraCaptureService: NSObject, ObservableObject {
         folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("sessions", isDirectory: true)
         super.init()
+    }
+
+    func startBrowsing() {
+        guard !browsing, lifecycle.canStart else {
+            if sessionClosing { record("START_BLOCKED phase=\(lifecycle.session?.phase.rawValue ?? "unknown")") }
+            return
+        }
+        generation = UUID()
+        let token = generation
+        let context = SessionContext(token: token)
+        let requested = scanIntervalSeconds.isFinite ? min(5, max(0.5, scanIntervalSeconds)) : 2
+        sessionScanInterval = mode == .card ? max(2, requested) : requested
+        guard lifecycle.start(id: token, browserID: context.browserID) else { return }
+        session = context
+        let browser = context.browser // This exact instance is captured through authorization.
         browser.delegate = self
         browser.browsedDeviceTypeMask = ICDeviceTypeMask(
             rawValue: ICDeviceTypeMask.camera.rawValue | ICDeviceLocationTypeMask.local.rawValue
         ) ?? .camera
-    }
-
-    func startBrowsing() {
-        guard !browsing else { return }
-        generation = UUID()
-        let token = generation
+        publishLifecycle()
         ptpReceiver?.cancel()
         ptpReceiver = nil
         ptpSelected = false
@@ -96,42 +123,48 @@ final class CameraCaptureService: NSObject, ObservableObject {
         browsing = true
         status = "正在要求相機存取權限…"
         record("START mode=\(mode.rawValue)")
-        Task {
+        record("SCAN_INTERVAL seconds=\(sessionScanInterval)")
+        record("BROWSER_CREATED session=\(token) browser=\(context.browserID)")
+        Task { [weak self, browser] in
             var allowed = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
             if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
                 allowed = await AVCaptureDevice.requestAccess(for: .video)
             }
-            guard token == self.generation, self.browsing else { return }
+            guard let self, self.isCurrentBrowser(browser, token: token), self.browsing else { return }
             self.record("CAMERA_PERMISSION \(AVCaptureDevice.authorizationStatus(for: .video).rawValue)")
             guard allowed else {
                 self.authorization = "相機權限未允許"
+                self.stopBrowsing()
                 self.fail("請在設定 → Cam Link 開啟相機權限，再重新連接。")
-                self.browsing = false
                 return
             }
-            self.browser.requestContentsAuthorization { [weak self] auth in
+            browser.requestContentsAuthorization { [weak self, browser] auth in
                 Task { @MainActor in
-                    guard let self, token == self.generation, self.browsing else { return }
+                    guard let self, self.isCurrentBrowser(browser, token: token), self.browsing else { return }
                     self.authorization = "相機已允許 · 內容授權 \(auth.rawValue)"
                     self.record("CONTENTS_AUTH \(auth.rawValue)")
                     guard auth == .authorized else {
+                        self.stopBrowsing()
                         self.fail("iPadOS 未允許外接相機內容存取。請到設定確認相機權限；若已允許，請匯出診斷。")
-                        self.browsing = false
                         return
                     }
                     do {
                         try FileManager.default.createDirectory(at: self.folder, withIntermediateDirectories: true)
                     } catch {
+                        self.stopBrowsing()
                         self.fail("無法建立 JPG 儲存資料夾：\(error.localizedDescription)")
-                        self.browsing = false
                         return
                     }
+                    guard let current = self.session,
+                          self.lifecycle.authorized(id: token, browserID: current.browserID) else { return }
                     self.status = "正在尋找 USB 相機…"
-                    self.browser.start()
+                    browser.start()
+                    self.record("BROWSER_START session=\(token) browser=\(current.browserID)")
                     self.timer?.invalidate()
-                    self.timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-                        Task { @MainActor in self?.tick() }
+                    self.timer = Timer.scheduledTimer(withTimeInterval: self.sessionScanInterval, repeats: true) { [weak self, browser] _ in
+                        Task { @MainActor in self?.tick(browser, token: token) }
                     }
+                    self.reconcileDevices(browser, token: token)
                 }
             }
         }
@@ -161,6 +194,40 @@ final class CameraCaptureService: NSObject, ObservableObject {
     }
 
     func stopBrowsing() {
+        guard browsing, let context = session else { return }
+        let action = lifecycle.stop(id: context.token)
+        invalidateReceiving(context)
+        publishLifecycle()
+        switch action {
+        case .released:
+            releaseSession(context)
+            status = "已停止接收"
+        case .waitForOpen:
+            status = "正在等待相機開啟完成後關閉，請保持連線…"
+            record("CLOSE_WAIT_OPEN session=\(context.token)")
+            armCloseBarrier(context)
+        case .requestClose:
+            status = "正在關閉相機工作階段，請保持連線…"
+            armCloseBarrier(context)
+            requestClose(context)
+        case .waiting, .ignored:
+            break
+        }
+    }
+
+    private func publishLifecycle() {
+        sessionClosing = lifecycle.sessionClosing
+        canStart = lifecycle.canStart
+    }
+
+    private func isCurrentBrowser(_ browser: ICDeviceBrowser, token: UUID) -> Bool {
+        guard let context = session, context.token == token, context.browser === browser else { return false }
+        return lifecycle.ownsBrowser(id: token, browserID: context.browserID)
+    }
+
+    /// Invalidate receiving work BEFORE asking Apple to close its native session.
+    /// Keep the context's device and immutable delegate alive for cleanup callbacks.
+    private func invalidateReceiving(_ context: SessionContext) {
         generation = UUID()
         timer?.invalidate()
         timer = nil
@@ -169,8 +236,8 @@ final class CameraCaptureService: NSObject, ObservableObject {
         ptpReceiver = nil
         ptpSelected = false
         ptpAuthorizing = false
-        browser.stop()
-        let oldCamera = camera
+        context.browser.stop()
+        record("BROWSER_STOP session=\(context.token) browser=\(context.browserID)")
         camera = nil
         connected = false
         catalogReady = false
@@ -180,9 +247,48 @@ final class CameraCaptureService: NSObject, ObservableObject {
         queue.removeAll()
         active = nil
         queuedCount = 0
-        oldCamera?.requestCloseSession()
-        status = "已停止接收"
-        record("STOP")
+        record("STOP session=\(context.token)")
+    }
+
+    private func requestClose(_ context: SessionContext) {
+        guard session === context, let device = context.camera else { return }
+        // Issued ONLY by the reducer's one-shot requestClose action.
+        record("SESSION_CLOSE_REQUEST session=\(context.token)")
+        device.requestCloseSession()
+    }
+
+    private func armCloseBarrier(_ context: SessionContext) {
+        guard closeTimer == nil else { return }
+        let token = context.token
+        closeTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.lifecycle.closeTimedOut(id: token) else { return }
+                self.closeTimer = nil
+                self.publishLifecycle()
+                self.record("CLOSE_BARRIER_TIMEOUT session=\(token) reconnectRequired=true")
+                self.requireReconnect("相機工作階段未確認關閉。")
+            }
+        }
+    }
+
+    private func requireReconnect(_ reason: String) {
+        closeTimer?.invalidate()
+        closeTimer = nil
+        publishLifecycle()
+        lastError = "\(reason) 請實際拔除 USB 相機再重新連接；確認拔除前不會再次開啟工作階段。"
+        status = "請拔除相機後重新連接"
+        record("RECONNECT_REQUIRED \(reason)")
+    }
+
+    private func releaseSession(_ context: SessionContext) {
+        guard session === context, lifecycle.canStart else { return }
+        closeTimer?.invalidate()
+        closeTimer = nil
+        context.browser.delegate = nil
+        context.camera?.delegate = nil
+        session = nil
+        publishLifecycle()
+        record("CLOSE_BARRIER_RELEASED session=\(context.token)")
     }
 
     func refreshContents() {
@@ -203,9 +309,10 @@ final class CameraCaptureService: NSObject, ObservableObject {
         }
     }
 
-    private func tick() {
-        guard browsing else { return }
-        // Receiver owns its own idle-only 2-second reconciliation timer.
+    private func tick(_ browser: ICDeviceBrowser, token: UUID) {
+        guard browsing, isCurrentBrowser(browser, token: token), token == generation else { return }
+        if camera == nil { reconcileDevices(browser, token: token) }
+        // Receiver owns its own idle-only reconciliation timer.
         guard !ptpSelected else { return }
         if active != nil, let downloadBegan, Date().timeIntervalSince(downloadBegan) > 120 {
             record("DOWNLOAD_TIMEOUT")
@@ -226,13 +333,33 @@ final class CameraCaptureService: NSObject, ObservableObject {
         }
     }
 
-    private func open(_ device: ICCameraDevice) {
-        guard browsing, camera == nil else { return }
+    private func reconcileDevices(_ browser: ICDeviceBrowser, token: UUID) {
+        guard browsing, isCurrentBrowser(browser, token: token), lifecycle.session?.phase == .discovering else { return }
+        let devices = (browser.devices ?? []).compactMap { $0 as? ICCameraDevice }
+        record("BROWSER_RECONCILE session=\(token) cachedCameras=\(devices.count)")
+        for device in devices { open(device, browser: browser, token: token, source: "cached") }
+    }
+
+    private func open(_ device: ICCameraDevice, browser: ICDeviceBrowser, token: UUID, source: String) {
+        guard browsing, camera == nil, isCurrentBrowser(browser, token: token), let context = session else {
+            record("DEVICE_IGNORED source=\(source) reason=stale-or-already-admitted")
+            return
+        }
+        let cameraID = UUID()
+        guard lifecycle.admitDevice(id: token, browserID: context.browserID, deviceID: cameraID) else {
+            record("DEVICE_IGNORED source=\(source) reason=phase")
+            return
+        }
+        context.camera = device
+        context.cameraID = cameraID
+        let delegate = CameraSessionDelegate(owner: self, token: token, cameraID: cameraID)
+        context.delegate = delegate
         camera = device
-        device.delegate = self
+        device.delegate = delegate
         cameraName = device.name ?? "USB 相機"
         status = "正在開啟 \(cameraName)…"
         record("DEVICE \(cameraName) uuid=\(device.uuidString ?? "unknown")")
+        record("SESSION_OPEN_REQUEST session=\(token) source=\(source)")
         device.requestOpenSession()
     }
 
@@ -287,13 +414,15 @@ final class CameraCaptureService: NSObject, ObservableObject {
     private func authorizePTPFallback(_ device: ICCameraDevice) {
         guard ptpSelected, !ptpAuthorizing, ptpReceiver == nil, device === camera,
               connected, browsing, active == nil, queue.isEmpty else { return }
-        ptpAuthorizing = true
         let token = generation
+        guard let context = session, context.token == token else { return }
+        let browser = context.browser
+        ptpAuthorizing = true
         status = "正在要求 PTP 讀取授權，請先不要拍攝…"
         record("CONTROL_AUTH_REQUEST readOnlyPTP=true")
-        browser.requestControlAuthorization { [weak self] auth in
+        browser.requestControlAuthorization { [weak self, browser] auth in
             Task { @MainActor in
-                guard let self, token == self.generation, self.browsing,
+                guard let self, token == self.generation, self.isCurrentBrowser(browser, token: token), self.browsing,
                       self.connected, device === self.camera, self.ptpSelected else { return }
                 self.ptpAuthorizing = false
                 self.authorization = "相機已允許 · 內容授權已允許 · PTP 授權 \(auth.rawValue)"
@@ -309,6 +438,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
                     self.record(message)
                 }
                 let receiver = PTPPhotoReceiver(reader: reader, mode: self.mode, folder: self.folder,
+                    scanInterval: self.sessionScanInterval,
                     trace: { [weak self] message in
                         guard let self, token == self.generation else { return }
                         self.record(message)
@@ -329,7 +459,9 @@ final class CameraCaptureService: NSObject, ObservableObject {
                         guard let self, token == self.generation, self.ptpSelected else { return }
                         self.stopBrowsing()
                         if let reason { self.fail(reason) }
-                        else { self.status = self.receivedCount == 0 ? "已停止接收 · 本次沒有接收 JPG" : "已完成接收" }
+                        else if !self.sessionClosing {
+                            self.status = self.receivedCount == 0 ? "已停止接收 · 本次沒有接收 JPG" : "已完成接收"
+                        }
                     })
                 self.ptpReceiver = receiver
                 // Calling finish before start prevents its initial State from
@@ -480,7 +612,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
     func diagnosticFile() -> URL? {
         let info = Bundle.main.infoDictionary ?? [:]
         if let camera { recordCatalog(camera, inventory: files(camera), reason: "REPORT", force: true) }
-        let header = "Cam Link \(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))\n\(UIDevice.current.model) / \(UIDevice.current.systemName) \(UIDevice.current.systemVersion)\n\(authorization)\nmode=\(mode.rawValue) camera=\(cameraName)\nbrowsing=\(browsing) connected=\(connected) catalogReady=\(catalogReady) finishing=\(finishing)\nstatus=\(status) catalog=\(catalogCount) pending=\(queuedCount) failed=\(failedCount) received=\(receivedCount)\nlastError=\(lastError)\nNo receiver passwords or pairing codes are included.\n\n"
+        let header = "Cam Link \(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))\n\(UIDevice.current.model) / \(UIDevice.current.systemName) \(UIDevice.current.systemVersion)\n\(authorization)\nmode=\(mode.rawValue) camera=\(cameraName)\nbrowsing=\(browsing) connected=\(connected) catalogReady=\(catalogReady) finishing=\(finishing)\nsessionClosing=\(sessionClosing) canStart=\(canStart) phase=\(lifecycle.session?.phase.rawValue ?? "idle") session=\(session?.token.uuidString ?? "none") browser=\(session?.browserID.uuidString ?? "none")\nstatus=\(status) catalog=\(catalogCount) pending=\(queuedCount) failed=\(failedCount) received=\(receivedCount)\nlastError=\(lastError)\nNo receiver passwords or pairing codes are included.\n\n"
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("CamLink-camera-diagnostics.txt")
         let highlights = "SESSION HIGHLIGHTS (may repeat rolling log entries)\n" + diagnosticHighlights.joined(separator: "\n")
         let rolling = "\n\nRECENT EVENTS\n" + logLines.joined(separator: "\n") + "\n"
@@ -541,102 +673,186 @@ final class CameraCaptureService: NSObject, ObservableObject {
 extension CameraCaptureService: ICDeviceBrowserDelegate {
     nonisolated func deviceBrowser(_ browser: ICDeviceBrowser, didAdd device: ICDevice, moreComing: Bool) {
         Task { @MainActor in
-            guard self.browsing, self.camera == nil, let camera = device as? ICCameraDevice else { return }
-            self.open(camera)
+            guard let context = self.session, context.browser === browser,
+                  self.isCurrentBrowser(browser, token: context.token), self.browsing,
+                  let camera = device as? ICCameraDevice else {
+                self.record("BROWSER_ADD_IGNORED reason=stale-or-inactive")
+                return
+            }
+            self.open(camera, browser: browser, token: context.token, source: "didAdd")
         }
     }
     nonisolated func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice, moreGoing: Bool) {
-        Task { @MainActor in self.removed(device) }
+        Task { @MainActor in
+            guard let context = self.session, context.browser === browser,
+                  self.isCurrentBrowser(browser, token: context.token), device === context.camera,
+                  let cameraID = context.cameraID else {
+                self.record("BROWSER_REMOVE_IGNORED reason=stale-or-unaccepted")
+                return
+            }
+            self.handleCameraEvent(.removed(device), token: context.token, cameraID: cameraID)
+        }
     }
 }
 
-extension CameraCaptureService: ICCameraDeviceDelegate {
-    private func removed(_ device: ICDevice) {
-        guard device === camera else { return }
-        record("DEVICE_REMOVED pending=\(queuedCount)")
-        stopBrowsing()
-        status = "相機已拔除"
-        lastError = "未完成的下載不會當作成功。重新接線後選「接收卡內 JPG」補收。"
-    }
-    nonisolated func device(_ device: ICDevice, didOpenSessionWithError error: (any Error)?) {
-        Task { @MainActor in
-            guard device === self.camera, self.browsing else { return }
+extension CameraCaptureService {
+    fileprivate func handleCameraEvent(_ event: CameraSessionEvent, token: UUID, cameraID: UUID) {
+        guard let context = session, context.token == token, context.cameraID == cameraID,
+              event.device === context.camera, lifecycle.ownsDevice(id: token, deviceID: cameraID) else {
+            record("SESSION_CALLBACK_IGNORED session=\(token) reason=stale")
+            return
+        }
+        // Cleanup events use the context token, NOT the invalidated receiving generation.
+        switch event {
+        case .opened(let device, let error):
+            let action = lifecycle.opened(id: token, deviceID: cameraID, succeeded: error == nil)
+            publishLifecycle()
+            switch action {
+            case .receive:
+                connected = true
+                lastError = ""
+                status = "正在讀取相機目錄，請先不要拍攝…"
+                record("SESSION_OPEN session=\(token)")
+                record("CAPABILITIES \(String(describing: device.capabilities))")
+                if let camera = device as? ICCameraDevice, camera.contentCatalogPercentCompleted >= 100 { ready(camera) }
+            case .requestClose:
+                record("SESSION_OPEN_CLEANUP_ONLY session=\(token)")
+                requestClose(context) // Stop during open: successful open is closed, never received.
+            case .requireReconnect:
+                record("SESSION_OPEN_ERROR session=\(token) \(error?.localizedDescription ?? "unknown")")
+                if browsing { invalidateReceiving(context) }
+                requireReconnect("無法確認相機開啟狀態：\(error?.localizedDescription ?? "未知錯誤")。")
+            case .ignored:
+                record("SESSION_OPEN_IGNORED session=\(token) reason=duplicate-or-phase")
+            }
+            return
+        case .closed(_, let error):
+            let action = lifecycle.closed(id: token, deviceID: cameraID, succeeded: error == nil)
+            record("SESSION_CLOSE_COMPLETE session=\(token) result=\(action) error=\(error?.localizedDescription ?? "none")")
+            switch action {
+            case .released:
+                if browsing { invalidateReceiving(context) }
+                releaseSession(context)
+                status = "相機工作階段已關閉"
+            case .requireReconnect:
+                if browsing { invalidateReceiving(context) }
+                requireReconnect("相機關閉失敗或已逾時：\(error?.localizedDescription ?? "仍須確認實際拔除")。")
+            case .ignored:
+                break
+            }
+            return
+        case .removed:
+            guard lifecycle.removed(id: token, deviceID: cameraID) else { return }
+            record("DEVICE_REMOVED session=\(token) pending=\(queuedCount)")
+            if browsing { invalidateReceiving(context) }
+            releaseSession(context)
+            status = "相機已拔除"
+            lastError = "未完成的下載不會當作成功。重新接線後選「接收卡內 JPG」補收。"
+            return
+        default:
+            break
+        }
+        guard browsing, connected, token == generation,
+              lifecycle.acceptsReceivingCallback(id: token, deviceID: cameraID) else {
+            record("SESSION_CALLBACK_IGNORED session=\(token) reason=not-receiving")
+            return
+        }
+        switch event {
+        case .encounteredError(_, let error):
             if let error {
-                self.record("SESSION_OPEN_ERROR \((error as NSError).domain)/\((error as NSError).code)")
-                self.stopBrowsing()
-                self.fail("無法開啟相機：\(error.localizedDescription)")
-                return
+                record("DEVICE_ERROR \((error as NSError).domain)/\((error as NSError).code)")
+                fail(error.localizedDescription)
             }
-            self.connected = true
-            self.lastError = ""
-            self.status = "正在讀取相機目錄，請先不要拍攝…"
-            self.record("SESSION_OPEN")
-            self.record("CAPABILITIES \(String(describing: device.capabilities))")
-            if let camera = device as? ICCameraDevice, camera.contentCatalogPercentCompleted >= 100 { self.ready(camera) }
-        }
-    }
-    nonisolated func device(_ device: ICDevice, didCloseSessionWithError error: (any Error)?) {
-        Task { @MainActor in
-            guard device === self.camera else { return }
-            self.record("SESSION_CLOSED \(error?.localizedDescription ?? "")")
-            self.stopBrowsing()
-            self.status = "相機工作階段已關閉"
-        }
-    }
-    nonisolated func didRemove(_ device: ICDevice) { Task { @MainActor in self.removed(device) } }
-    nonisolated func device(_ device: ICDevice, didEncounterError error: (any Error)?) {
-        Task { @MainActor in
-            guard device === self.camera, let error else { return }
-            self.record("DEVICE_ERROR \((error as NSError).domain)/\((error as NSError).code)")
-            self.fail(error.localizedDescription)
-        }
-    }
-    nonisolated func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) {
-        Task { @MainActor in
-            guard device === self.camera else { return }
-            self.record("ACCESS_RESTRICTION_REMOVED")
-            self.refreshContents()
-        }
-    }
-    nonisolated func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) {
-        Task { @MainActor in
-            guard device === self.camera else { return }
-            self.fail("相機內容存取受限制，請確認相機已解鎖或允許連接。")
-        }
-    }
-    nonisolated func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) {
-        Task { @MainActor in
-            guard camera === self.camera, self.connected, self.browsing else { return }
-            self.record("ITEMS_ADDED count=\(items.count) ready=\(self.catalogReady)")
-            guard !self.ptpSelected else { return }
+        case .restrictionRemoved:
+            record("ACCESS_RESTRICTION_REMOVED")
+            refreshContents()
+        case .restrictionEnabled:
+            fail("相機內容存取受限制，請確認相機已解鎖或允許連接。")
+        case .itemsAdded(let camera, let items):
+            record("ITEMS_ADDED count=\(items.count) ready=\(catalogReady)")
+            guard !ptpSelected else { return }
             // Initial catalog events belong to the baseline, not live arrivals.
-            if self.catalogReady { self.enqueue(items.compactMap { $0 as? ICCameraFile }); self.ingest(camera) }
-        }
-    }
-    nonisolated func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
-        Task { @MainActor in self.ready(device) }
-    }
-    nonisolated func cameraDevice(_ camera: ICCameraDevice, didReceivePTPEvent eventData: Data) {
-        Task { @MainActor in
-            guard camera === self.camera else { return }
-            self.record("PTP_EVENT \(Self.describePTPEvent(eventData))")
-            if self.ptpSelected {
-                if let event = PTPCodec.event(eventData) { self.ptpReceiver?.receiveEvent(event) }
+            if catalogReady { enqueue(items.compactMap { $0 as? ICCameraFile }); ingest(camera) }
+        case .catalogReady(let device):
+            ready(device)
+        case .ptpEvent(let camera, let eventData):
+            record("PTP_EVENT \(Self.describePTPEvent(eventData))")
+            if ptpSelected {
+                if let event = PTPCodec.event(eventData) { ptpReceiver?.receiveEvent(event) }
                 return
             }
-            self.ingest(camera)
+            ingest(camera)
+        case .capabilitiesChanged:
+            record("CAPABILITIES_CHANGED")
+            refreshContents()
+        default:
+            break
         }
     }
-    nonisolated func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {}
-    nonisolated func cameraDevice(_ camera: ICCameraDevice, didRenameItems items: [ICCameraItem]) {}
-    nonisolated func cameraDeviceDidChangeCapability(_ camera: ICCameraDevice) {
-        Task { @MainActor in
-            guard camera === self.camera else { return }
-            self.record("CAPABILITIES_CHANGED")
-            self.refreshContents()
+}
+
+fileprivate enum CameraSessionEvent {
+    case opened(ICDevice, (any Error)?)
+    case closed(ICDevice, (any Error)?)
+    case removed(ICDevice)
+    case encounteredError(ICDevice, (any Error)?)
+    case restrictionRemoved(ICDevice)
+    case restrictionEnabled(ICDevice)
+    case itemsAdded(ICCameraDevice, [ICCameraItem])
+    case catalogReady(ICCameraDevice)
+    case ptpEvent(ICCameraDevice, Data)
+    case capabilitiesChanged(ICCameraDevice)
+
+    var device: ICDevice {
+        switch self {
+        case .opened(let device, _), .closed(let device, _), .removed(let device),
+             .encounteredError(let device, _), .restrictionRemoved(let device), .restrictionEnabled(let device):
+            return device
+        case .itemsAdded(let camera, _), .catalogReady(let camera), .ptpEvent(let camera, _), .capabilitiesChanged(let camera):
+            return camera
         }
     }
-    nonisolated func cameraDevice(_ camera: ICCameraDevice, didReceiveThumbnail thumbnail: CGImage?, for item: ICCameraItem, error: (any Error)?) {}
-    nonisolated func cameraDevice(_ camera: ICCameraDevice, didReceiveMetadata metadata: [AnyHashable: Any]?, for item: ICCameraItem, error: (any Error)?) {}
-    nonisolated func cameraDevice(_ camera: ICCameraDevice, didCompleteDeleteFilesWithError error: (any Error)?) {}
+}
+
+/// Every callback carries the immutable owner assigned BEFORE requestOpenSession.
+/// Reusing the same ICCameraDevice later does not relabel an already queued callback.
+/// Signatures mirror the app's existing ImageCaptureCore SDK delegate surface.
+fileprivate final class CameraSessionDelegate: NSObject, ICCameraDeviceDelegate {
+    private weak var owner: CameraCaptureService?
+    private let token: UUID
+    private let cameraID: UUID
+
+    init(owner: CameraCaptureService, token: UUID, cameraID: UUID) {
+        self.owner = owner
+        self.token = token
+        self.cameraID = cameraID
+        super.init()
+    }
+
+    private func forward(_ event: CameraSessionEvent) {
+        let token = self.token
+        let cameraID = self.cameraID
+        Task { @MainActor [weak owner = owner] in
+            owner?.handleCameraEvent(event, token: token, cameraID: cameraID)
+        }
+    }
+
+    func device(_ device: ICDevice, didOpenSessionWithError error: (any Error)?) { forward(.opened(device, error)) }
+    func device(_ device: ICDevice, didCloseSessionWithError error: (any Error)?) { forward(.closed(device, error)) }
+    func didRemove(_ device: ICDevice) { forward(.removed(device)) }
+    func device(_ device: ICDevice, didEncounterError error: (any Error)?) { forward(.encounteredError(device, error)) }
+    func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) { forward(.restrictionRemoved(device)) }
+    func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) { forward(.restrictionEnabled(device)) }
+    func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) { forward(.itemsAdded(camera, items)) }
+    func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) { forward(.catalogReady(device)) }
+    func cameraDevice(_ camera: ICCameraDevice, didReceivePTPEvent eventData: Data) { forward(.ptpEvent(camera, eventData)) }
+    func cameraDeviceDidChangeCapability(_ camera: ICCameraDevice) { forward(.capabilitiesChanged(camera)) }
+
+    // Required notifications intentionally have no receiving-side effects.
+    // In particular, implementing a delete COMPLETION never requests a delete.
+    func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {}
+    func cameraDevice(_ camera: ICCameraDevice, didRenameItems items: [ICCameraItem]) {}
+    func cameraDevice(_ camera: ICCameraDevice, didReceiveThumbnail thumbnail: CGImage?, for item: ICCameraItem, error: (any Error)?) {}
+    func cameraDevice(_ camera: ICCameraDevice, didReceiveMetadata metadata: [AnyHashable: Any]?, for item: ICCameraItem, error: (any Error)?) {}
+    func cameraDevice(_ camera: ICCameraDevice, didCompleteDeleteFilesWithError error: (any Error)?) {}
 }

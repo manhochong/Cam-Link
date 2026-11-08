@@ -9,6 +9,9 @@ enum PcClientError: LocalizedError {
     case authFailed
     case uploadFailed(String)
     case serverBusy
+    case unsafeRemoteName
+    case redirectRefused
+    case transientHTTP(Int)
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +21,9 @@ enum PcClientError: LocalizedError {
         case .authFailed: return "配對碼或接收器不符"
         case .uploadFailed(let s): return s
         case .serverBusy: return "電腦忙碌（503），稍後會重試"
+        case .unsafeRemoteName: return "PC 原圖檔名、大小或 SHA-256 無效"
+        case .redirectRefused: return "已拒絕接收器重導向，配對碼不會轉送"
+        case .transientHTTP(let status): return "電腦暂時未能接收（HTTP \(status)）"
         }
     }
 }
@@ -74,7 +80,10 @@ enum PcClient {
             let box = ProbeBox(cont)
             var request = URLRequest(url: url, timeoutInterval: 8)
             request.httpMethod = "HEAD"
-            let session = URLSession(configuration: .ephemeral, delegate: box, delegateQueue: nil)
+            CamLinkNetworkPolicy.apply(to: &request, allowsCellular: false)
+            let configuration = URLSessionConfiguration.ephemeral
+            CamLinkNetworkPolicy.apply(to: configuration, allowsCellular: false)
+            let session = URLSession(configuration: configuration, delegate: box, delegateQueue: nil)
             box.session = session
             session.dataTask(with: request) { _, _, _ in
                 box.finishIfNeeded()
@@ -85,11 +94,16 @@ enum PcClient {
     static func authenticate(base: String, password: String, fingerprint: String) async throws {
         guard let url = URL(string: base) else { throw PcClientError.badIP }
         let session = pinnedSession(fingerprint: fingerprint)
+        defer { session.finishTasksAndInvalidate() }
         var request = URLRequest(url: url, timeoutInterval: 8)
         request.httpMethod = "HEAD"
         request.setValue(basicAuth(password), forHTTPHeaderField: "Authorization")
+        CamLinkNetworkPolicy.apply(to: &request, allowsCellular: false)
         let (_, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw PcClientError.authFailed }
+        guard http.url == url, !(300...399).contains(http.statusCode) else {
+            throw PcClientError.redirectRefused
+        }
         let header = http.value(forHTTPHeaderField: "X-CamLink-Receiver")
         guard http.statusCode == 200, header == "1" else { throw PcClientError.authFailed }
     }
@@ -102,24 +116,46 @@ enum PcClient {
         size: Int64
     ) async throws {
         guard pair.isReady else { throw PcClientError.authFailed }
-        let encoded = remoteName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? remoteName
-        guard let url = URL(string: pair.inboxBase + encoded) else { throw PcClientError.badIP }
+        guard isSafeRemoteName(remoteName), size > 0, size <= 512 * 1024 * 1024,
+              sha256.range(of: "^[0-9a-fA-F]{64}$", options: .regularExpression) != nil else {
+            throw PcClientError.unsafeRemoteName
+        }
+        let base = try inboxBase(ip: pair.host)
+        guard pair.inboxBase == base, let url = URL(string: base + remoteName) else {
+            throw PcClientError.badIP
+        }
         let session = pinnedSession(fingerprint: pair.fingerprint)
+        defer { session.finishTasksAndInvalidate() }
         var request = URLRequest(url: url, timeoutInterval: 120)
         request.httpMethod = "PUT"
         request.setValue(basicAuth(pair.password), forHTTPHeaderField: "Authorization")
         request.setValue(sha256, forHTTPHeaderField: "X-CamLink-SHA256")
+        request.setValue("*", forHTTPHeaderField: "If-None-Match")
         request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
         request.setValue(String(size), forHTTPHeaderField: "Content-Length")
+        CamLinkNetworkPolicy.apply(to: &request, allowsCellular: false)
         let (_, response) = try await session.upload(for: request, fromFile: fileURL)
         guard let http = response as? HTTPURLResponse else {
             throw PcClientError.uploadFailed("電腦無回應")
         }
+        guard http.url == url, !(300...399).contains(http.statusCode) else {
+            throw PcClientError.redirectRefused
+        }
         if http.statusCode == 503 { throw PcClientError.serverBusy }
+        if http.statusCode == 401 { throw PcClientError.authFailed }
+        if [408, 429].contains(http.statusCode) || http.statusCode >= 500 {
+            throw PcClientError.transientHTTP(http.statusCode)
+        }
         let back = http.value(forHTTPHeaderField: "X-CamLink-SHA256") ?? ""
         guard http.statusCode == 201, back.lowercased() == sha256.lowercased() else {
             throw PcClientError.uploadFailed("電腦未確認原圖（HTTP \(http.statusCode)）")
         }
+    }
+
+    /// Exact Receiver allowlist; no path segments, %-decoding, query or traversal.
+    static func isSafeRemoteName(_ name: String) -> Bool {
+        !name.contains("..") && name.range(of: "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,190}\\.jpe?g$",
+            options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     private static func basicAuth(_ password: String) -> String {
@@ -129,7 +165,9 @@ enum PcClient {
 
     private static func pinnedSession(fingerprint: String) -> URLSession {
         let delegate = PinningDelegate(expected: fingerprint.lowercased())
-        return URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        let configuration = URLSessionConfiguration.ephemeral
+        CamLinkNetworkPolicy.apply(to: configuration, allowsCellular: false)
+        return URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
     }
 }
 
@@ -168,9 +206,15 @@ private final class ProbeBox: NSObject, URLSessionDelegate {
     }
 }
 
-private final class PinningDelegate: NSObject, URLSessionDelegate {
+private final class PinningDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
     let expected: String
     init(expected: String) { self.expected = expected }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
 
     func urlSession(
         _ session: URLSession,

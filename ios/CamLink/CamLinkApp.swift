@@ -1,26 +1,22 @@
 import SwiftUI
 
 @main
+@MainActor
 struct CamLinkApp: App {
-    @StateObject private var camera = CameraCaptureService()
-    @StateObject private var session = ShootSession()
-    @StateObject private var pair = PairStore()
-    @StateObject private var webDAV = WebDAVStore()
+    @StateObject private var runtime = CamLinkRuntime()
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environmentObject(camera)
-                .environmentObject(session)
-                .environmentObject(pair)
-                .environmentObject(webDAV)
-                .onAppear {
-                    camera.onJPEG = { file in
-                        Task { @MainActor in
-                            session.ingest(file)
-                        }
-                    }
-                }
+                .environmentObject(runtime)
+                .environmentObject(runtime.camera)
+                .environmentObject(runtime.session)
+                .environmentObject(runtime.pair)
+                .environmentObject(runtime.pc)
+                .environmentObject(runtime.webDAV)
+                .environmentObject(runtime.google)
+                .environmentObject(runtime.oneDrive)
+                .environmentObject(runtime.feedback)
         }
     }
 }

@@ -36,6 +36,9 @@ workflows:
             ios/CamLink/Camera/JPEGIntegrity.swift ios/CamLink/Camera/MPFIntegrity.swift \
             ios/MPFIntegrityTests.swift -o build/mpf-tests/integrity-tests
           build/mpf-tests/integrity-tests | tee build/mpf-tests/results.txt
+      - name: Test native cloud, lifecycle, dual PC and activity modules (offline)
+        script: |
+          bash ios/run_parity_tests.sh
       - name: Install XcodeGen
         script: |
           brew install xcodegen
@@ -76,6 +79,7 @@ workflows:
       - build/ptp-tests/results.txt
       - build/jpeg-tests/results.txt
       - build/mpf-tests/results.txt
+      - build/parity-tests/*-results.txt
     triggering:
       events:
         - push
@@ -126,6 +130,9 @@ workflows:
             ios/CamLink/Camera/JPEGIntegrity.swift ios/CamLink/Camera/MPFIntegrity.swift \
             ios/MPFIntegrityTests.swift -o build/mpf-tests/integrity-tests
           build/mpf-tests/integrity-tests | tee build/mpf-tests/results.txt
+      - name: Test native cloud, lifecycle, dual PC and activity modules (offline)
+        script: |
+          bash ios/run_parity_tests.sh
       - name: Install XcodeGen
         script: |
           brew install xcodegen
@@ -153,6 +160,7 @@ workflows:
       - build/ptp-tests/results.txt
       - build/jpeg-tests/results.txt
       - build/mpf-tests/results.txt
+      - build/parity-tests/*-results.txt
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
     publishing:

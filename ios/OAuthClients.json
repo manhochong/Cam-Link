@@ -1,0 +1,14 @@
+{
+  "bundleID": "hk.camlink.ios",
+  "appleTeamID": "4CMUH5G2T5",
+  "googleProjectID": "work-camera-512615",
+  "googleClientName": "Cam Link iOS Drive",
+  "googleClientID": "518900347391-4fh5i9n3q2jpgh70aujo6ofs1i715dqu.apps.googleusercontent.com",
+  "googleCallbackScheme": "com.googleusercontent.apps.518900347391-4fh5i9n3q2jpgh70aujo6ofs1i715dqu",
+  "microsoftClientID": "16437f88-79e4-499f-8cb3-7f07c9146e0c",
+  "microsoftClientName": "Cam Link iOS",
+  "microsoftTenantID": "0051d77d-2447-4003-8059-01970cdfbed6",
+  "microsoftSignInAudience": "AzureADandPersonalMicrosoftAccount",
+  "microsoftDelegatedScopes": ["openid", "profile", "offline_access", "User.Read", "Files.ReadWrite"],
+  "microsoftRedirectURI": "msauth.hk.camlink.ios://auth"
+}

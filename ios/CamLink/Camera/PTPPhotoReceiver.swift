@@ -18,6 +18,7 @@ final class PTPPhotoReceiver {
     private let reader: PTPCameraReader
     private let mode: CameraCaptureService.ReceiveMode
     private let folder: URL
+    private let scanInterval: TimeInterval
     private let trace: (String) -> Void
     private let onState: (State) -> Void
     private let onJPEG: (ReceivedJPEG) -> Void
@@ -58,11 +59,14 @@ final class PTPPhotoReceiver {
     }
 
     init(reader: PTPCameraReader, mode: CameraCaptureService.ReceiveMode, folder: URL,
+         scanInterval: TimeInterval = 2,
          trace: @escaping (String) -> Void, onState: @escaping (State) -> Void,
          onJPEG: @escaping (ReceivedJPEG) -> Void, onFinished: @escaping (String?) -> Void) {
         self.reader = reader
         self.mode = mode
         self.folder = folder
+        let requested = scanInterval.isFinite ? min(5, max(0.5, scanInterval)) : 2
+        self.scanInterval = mode == .card ? max(2, requested) : requested
         self.trace = trace
         self.onState = onState
         self.onJPEG = onJPEG
@@ -73,7 +77,7 @@ final class PTPPhotoReceiver {
         guard !cancelled else { return }
         publish()
         if !finishing, timer == nil {
-            timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            timer = Timer.scheduledTimer(withTimeInterval: scanInterval, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.reconcile() }
             }
         }

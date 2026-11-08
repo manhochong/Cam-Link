@@ -498,20 +498,20 @@ private enum WebDAVTransport {
                 var hash = SHA256()
                 var count: Int64 = 0
                 var first = Data()
-                var last = Data()
                 while true {
                     try Task.checkCancellation()
                     guard let block = try handle.read(upToCount: 128 * 1024), !block.isEmpty else { break }
                     if first.count < 2 { first.append(contentsOf: block.prefix(2 - first.count)) }
-                    last.append(block)
-                    last = Data(last.suffix(2))
                     count += Int64(block.count)
                     guard count <= bytes else { throw mismatch }
                     hash.update(data: block)
                 }
                 let digest = hash.finalize().map { String(format: "%02x", $0) }.joined()
+                // Intake already validated JPEG/MPF structure with ImageIO. Recheck
+                // exact original bytes against its immutable receipt, including all
+                // indexed auxiliary images and padding; never crop/re-encode here.
                 guard count == bytes, digest == sha.lowercased(),
-                      !localOriginal || (first == Data([0xff, 0xd8]) && last == Data([0xff, 0xd9]))
+                      !localOriginal || first == Data([0xff, 0xd8])
                 else { throw mismatch }
             } catch is CancellationError { throw CancellationError() }
             catch { throw mismatch }
