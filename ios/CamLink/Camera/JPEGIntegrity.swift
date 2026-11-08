@@ -31,6 +31,7 @@ enum JPEGIntegrity {
         case invalidMarker, truncatedSegment, invalidSegment
         case unknownSuffix, excessivePadding
         case sizeMismatch(actual: Int64, expected: Int64)
+        case invalidMPF(String)
         case decoder
 
         var retryable: Bool {
@@ -53,6 +54,7 @@ enum JPEGIntegrity {
             case .excessivePadding: return "JPG EOI 後填補超過 64 KiB"
             case let .sizeMismatch(actual, expected):
                 return "照片大小不符：\(actual) / \(expected) bytes"
+            case let .invalidMPF(reason): return "JPG MPF 索引或影像範圍無效：\(reason)"
             case .decoder: return "JPG 無法由 ImageIO 完整解碼"
             }
         }
@@ -66,8 +68,29 @@ enum JPEGIntegrity {
             throw Failure.sizeMismatch(actual: bytes, expected: expected)
         }
         let layout = try inspect(data)
-        guard layout.trailingKind != .unknown else { throw Failure.unknownSuffix }
-        guard layout.trailingBytes <= maximumPaddingBytes else { throw Failure.excessivePadding }
+        let mpf: MPFIntegrity.Layout?
+        do { mpf = try MPFIntegrity.parse(data, primaryBytes: layout.eoiIndex + 2) }
+        catch { throw Failure.invalidMPF(error.localizedDescription) }
+        if let mpf {
+            // MPF's indexed JPEGs are not arbitrary trailing padding. Its parser
+            // validates all ranges and bounded unindexed gaps before decoding.
+            // Decode the main image from the complete container, and each indexed
+            // preview separately. Slices exist only in memory; saved bytes and
+            // the SHA-256 below always cover the complete original object.
+            try decode(data)
+            for image in mpf.images.dropFirst() {
+                try decode(data.subdata(in: image.start..<(image.start + image.length)))
+            }
+        } else {
+            guard layout.trailingKind != .unknown else { throw Failure.unknownSuffix }
+            guard layout.trailingBytes <= maximumPaddingBytes else { throw Failure.excessivePadding }
+            try decode(data)
+        }
+        let sha = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        return Verified(bytes: bytes, sha: sha, layout: layout)
+    }
+
+    private static func decode(_ data: Data) throws {
         try autoreleasepool {
             guard let source = CGImageSourceCreateWithData(data as CFData, nil),
                   CGImageSourceGetType(source) == "public.jpeg" as CFString,
@@ -84,8 +107,6 @@ enum JPEGIntegrity {
                 throw Failure.decoder
             }
         }
-        let sha = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        return Verified(bytes: bytes, sha: sha, layout: layout)
     }
 
     /// Walks markers only. A returned layout can still have an unacceptable suffix.
@@ -109,7 +130,18 @@ enum JPEGIntegrity {
                     raw.count >= 14 && raw[12] == 0xFF && raw[13] == 0xD8)
         }
         let layout = walk(data).layout
-        return "bytes=\(data.count) start=\(endpoints.0) end=\(endpoints.1) soiAtStart=\(endpoints.2) eoiAtEnd=\(endpoints.3) soiAtOffset12=\(endpoints.4) trueEOIindex=\(layout?.eoiIndex ?? -1) trailing=\(layout?.trailingBytes ?? -1) kind=\(layout?.trailingKind.rawValue ?? "unknown")"
+        var container = ""
+        if let layout {
+            do {
+                if let mpf = try MPFIntegrity.parse(data, primaryBytes: layout.eoiIndex + 2) {
+                    let indexed = mpf.images.reduce(0) { $0 + $1.length }
+                    container = " container=MPF mpfImages=\(mpf.images.count) unindexed=\(data.count - indexed)"
+                }
+            } catch {
+                container = " container=MPF-invalid"
+            }
+        }
+        return "bytes=\(data.count) start=\(endpoints.0) end=\(endpoints.1) soiAtStart=\(endpoints.2) eoiAtEnd=\(endpoints.3) soiAtOffset12=\(endpoints.4) trueEOIindex=\(layout?.eoiIndex ?? -1) trailing=\(layout?.trailingBytes ?? -1) kind=\(layout?.trailingKind.rawValue ?? "unknown")\(container)"
     }
 
     private struct WalkResult {

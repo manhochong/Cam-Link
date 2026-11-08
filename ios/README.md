@@ -7,6 +7,12 @@
 - 候選 build 37 增加真正 WebDAV 原圖上傳與批量系統分享。Google Drive／OneDrive 直接登入仍待原生 OAuth 設定，不包含相機 Wi‑Fi 或 FlashAir；不能把分享介面當成雲端已核對。
 - ImageCaptureCore 是 iOS 可用的 [Apple 官方相機匯入介面](https://developer.apple.com/documentation/imagecapturecore)；它不是 Android 的原始 USB bulk API。不同相機、韌體和 USB 轉接器仍需逐台實測。
 
+### build 41：MPF／MPO 多影像 JPG 相容候選版
+
+build 40 新診斷顯示主影像 EOI 後仍有約 446 KB 非純填充資料，因此在 ImageIO 解碼前遭拒。使用者以 ZIP 私下提供的一張相機原始 JPG 已證實它含標準 MPF／MPO 索引：一張 7232 × 5424 主圖與一張 1440 × 1080 大型預覽圖，Pillow 已實際解碼兩張。索引所列大小與原圖各 JPEG 邊界相符；影像間與整檔尾端另有有界非零資料。這不是單純增加零填充上限能解決的問題。[MPF 格式說明](https://exiftool.org/TagNames/MPF.html)
+
+候選 build 41 讀取 APP2 MPF 的 TIFF 索引，核對大小、相對 offset、影像不重疊和每張 JPEG 的結構與解碼，再沿用同一本機保存及電腦上傳管線。原圖包含的主影像、預覽圖和其他 bytes 全部保留；不裁切、重新壓縮或只計算主圖 SHA。普通單影像 JPG 仍拒絕未知尾端，MPF 索引錯誤仍拒絕，不自動重抓六次。原照片只供私人分析，不加入 Git、IPA 或一般建置產物；CI 使用合成影像。Mac ImageIO 原圖驗證、簽名建置與 TestFlight 指派尚待完成，iPad 實機收檔仍待驗收。
+
 ### build 40：JPG 結構驗證與接收失敗顯示候選版
 
 build 39 已實機列出 154 個物件並執行 JPG GetObject，但最終成功 0 張、失敗 74 個。可見下載回傳成功且大小相等，全部停在合併的「缺少 SOI／EOI」檢查。首頁與紀錄頁尚無照片，是因為驗證未成功，不是照片已保存但兩頁不同步。報告未包含照片起訖 bytes，不能斷言相機照片損壞，也不能把區塊對齊大小直接當成填充證據。
