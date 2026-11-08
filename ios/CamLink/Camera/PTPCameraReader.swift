@@ -8,6 +8,12 @@ struct PTPDeviceInformation: Sendable {
     let model: String
     let version: String
     let operations: Set<UInt16>
+    let standardVersion: UInt16
+    let vendorExtensionID: UInt32
+    let metadataBytes: Int
+    let standardBytes: Int
+    let trailingBytes: Int
+    let trailingAllZero: Bool
 }
 
 struct PTPObjectInformation: Sendable {
@@ -187,8 +193,8 @@ enum PTPCodec {
 
     static func deviceInfo(_ data: Data) throws -> PTPDeviceInformation {
         var reader = try Reader(data)
-        _ = try reader.uint16() // StandardVersion
-        _ = try reader.uint32() // VendorExtensionID (information only)
+        let standardVersion = try reader.uint16()
+        let vendorExtensionID = try reader.uint32() // information only; no vendor commands
         _ = try reader.uint16() // VendorExtensionVersion
         _ = try reader.string() // VendorExtensionDesc
         _ = try reader.uint16() // FunctionalMode
@@ -201,8 +207,15 @@ enum PTPCodec {
         let model = try reader.string()
         let version = try reader.string()
         _ = try reader.string() // SerialNumber: parsed for bounds, never exposed/logged.
-        try reader.requireEnd("DeviceInfo dataset")
-        return PTPDeviceInformation(manufacturer: manufacturer, model: model, version: version, operations: operations)
+        // DeviceInfo is descriptive metadata, not the image object. Some cameras
+        // append extra bytes after the standard fields. All fields above remain
+        // strictly bounds/UTF-16 checked, and Reader enforces the 4 MiB total cap.
+        // Ignore only the uninterpreted suffix; do not change any other dataset
+        // parser, response-container check, object size or JPEG validation.
+        return PTPDeviceInformation(manufacturer: manufacturer, model: model, version: version,
+            operations: operations, standardVersion: standardVersion, vendorExtensionID: vendorExtensionID,
+            metadataBytes: data.count, standardBytes: reader.offset, trailingBytes: reader.remaining,
+            trailingAllZero: data.dropFirst(reader.offset).allSatisfy { $0 == 0 })
     }
 
     static func storageIDs(_ data: Data) throws -> [UInt32] {
@@ -393,6 +406,8 @@ final class PTPCameraReader {
     func deviceInfo() async throws -> PTPDeviceInformation {
         let bytes = try await send(0x1001)
         let info = try PTPCodec.deviceInfo(bytes)
+        let tailKind = info.trailingBytes == 0 ? "none" : (info.trailingAllZero ? "zero-filled" : "opaque")
+        trace("PTP_DEVICE_INFO_LAYOUT totalBytes=\(info.metadataBytes) standardBytes=\(info.standardBytes) trailingBytes=\(info.trailingBytes) tailKind=\(tailKind) standardVersion=\(info.standardVersion) vendorID=\(info.vendorExtensionID)")
         let capabilities = info.operations.sorted().map { String(format: "%04X", Int($0)) }.joined(separator: ",")
         trace("PTP model=\(info.model) capabilities=\(capabilities)")
         return info

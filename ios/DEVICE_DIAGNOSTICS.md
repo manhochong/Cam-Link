@@ -1,4 +1,4 @@
-# DC-S1RM2／iPad USB 接收診斷：build 36–38
+# DC-S1RM2／iPad USB 接收診斷：build 36–39
 
 使用者提供的 `CamLink-camera-diagnostics.txt` 顯示 App 0.2.25（36），iPadOS 26.5.2。三次相機權限及內容授權均成功，三次 `SESSION_OPEN` 均成功；三次 `BASELINE` 都是 0 個物件。日誌有 56 次 16-byte PTP 事件，但沒有 `ITEMS_ADDED` 或 `DOWNLOAD_BEGIN`。
 
@@ -28,6 +28,16 @@ build 38 的同一 normalizer 用於實際 adapter 和回歸測試。只有一�
 
 Codemagic build 38 `6af03f0f24e1ec237557723a` 已實際在 macOS runner 執行回歸測試，輸出 `PTPCodecChecks: 503 offline checks passed; no camera operations performed.`。新增 callback case 使用合成、有效的 235-byte DeviceInfo 與 12-byte response；這是重現長度與角色的測試資料，不是使用者相機回傳的原始內容。完整 iOS SDK 編譯、簽名匯出與最終 metadata 檢查均通過；Apple uploader 在 09:24:23 UTC 回覆 `UPLOAD SUCCEEDED with no errors`。已核實 App Store Connect build 38 為 `Testing`，且加入 `CamLink Internal`。可在 TestFlight 更新至 `0.2.25 (38)`，重新接線後先測卡內 JPG，再測 fresh baseline 之後的新拍 JPG。若仍失敗，提供 build 38 新診斷與相機 USB 模式；目前不能宣稱硬體相容已修復。
 
+## build 38 實機回報與 build 39 metadata 修正
+
+使用者的新診斷顯示 build 38 在 2026-11-08 09:29:46 UTC 收到 `PTP_NATIVE opcode=1001 firstBytes=235 secondBytes=12 firstResponse=not-response secondResponse=2001`；下一行是 `response=2001 responseSlot=second bytes=235`。這已實機確認 callback 角色修正有效，而且相機的 GetDeviceInfo 回應成功。現在停在 `Malformed or truncated PTP DeviceInfo dataset trailing bytes`，不是原來的 response length，也不是系統拒絕授權。
+
+程式已依欄位長度和 UTF-16 規則讀完標準 DeviceInfo，連 SerialNumber 也通過邊界檢查，但 `requireEnd` 因仍有剩餘資料而拒絕整份 metadata。報告沒有 raw dataset、已讀 offset 或剩餘 bytes 數，所以不能斷言尾端一定為填充或已知 Panasonic 擴充。libgphoto2 的 `ptp_unpack_DI` 解析標準欄位後不強制 offset 等於整份長度；其末端識別字串甚至採寬鬆處理。這支持對描述性 DeviceInfo 的尾端採相容處理，而不代表任何照片 payload 都可忽略尾端。[5]
+
+build 39 候選版只移除 DeviceInfo 標準欄位後的 exact-end 限制：所有標準欄位仍完整解析，保留 4 MiB metadata 總上限、陣列數量／剩餘大小檢查及 UTF-16 結尾／代理對檢查。未解釋的尾端不會當作 operation、handle 或命令，也不儲存或輸出內容。新增 `PTP_DEVICE_INFO_LAYOUT` 記錄 totalBytes、standardBytes、trailingBytes、zero-filled／opaque 分類、StandardVersion 和 vendor ID，仍不公開序號。StorageIDs、ObjectHandles、ObjectInfo、response container、照片大小、JPG 驗證與 SHA-256 保持原有嚴格檢查；不新增相機設定或刪除命令。
+
+回歸測試使用合成的零尾端與非零尾端，並涵蓋完整標準欄位截斷、非法字串及超過 metadata 上限。這些資料不是實機 235 bytes 的副本。build 39 尚待 macOS runner 實際測試、簽名建置及 TestFlight 指派；實機是否能列出／下載照片也尚未確認。
+
 ## 其他相機的支援範圍
 
 iOS 目前沒有完成實機驗收的相機型號清單；DC-S1RM2 也仍是修正候選版測試中。標準 PTP 讀取不按品牌限制，但相機必須提供標準物件查詢／讀取能力，USB 模式與 iPadOS 也須相容。讀取卡內既有 JPG 與 USB 連線中拍攝新 JPG 是兩項不同能力，不能以其中一項成功推斷另一項已支援。
@@ -40,3 +50,4 @@ Android `MainActivity.java` 的既有文案記錄 LUMIX S1、S1 II、S1R II 有�
 [2]: https://developer.apple.com/documentation/imagecapturecore/iccameradevicedelegate/cameradevice%28_:didreceiveptpevent:%29 "Apple PTP event delegate"
 [3]: https://developer.apple.com/documentation/imagecapturecore/iccameradevice/tetheredcaptureenabled "Apple tethered capture status"
 [4]: https://eww.pavc.panasonic.co.jp/dscoi/DC-S1RM2/html/DC-S1RM2_DVQP3245_eng/0161.html "Panasonic DC-S1RM2 tethered recording"
+[5]: https://raw.githubusercontent.com/gphoto/libgphoto2/master/camlibs/ptp2/ptp-pack.c "libgphoto2 DeviceInfo dataset decoding"

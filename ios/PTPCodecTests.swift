@@ -188,7 +188,6 @@ enum PTPCodecChecks {
         for length in 0..<device.count {
             try rejects("DeviceInfo truncation \(length)") { _ = try PTPCodec.deviceInfo(Data(device.prefix(length))) }
         }
-        try rejects("DeviceInfo trailing bytes") { _ = try PTPCodec.deviceInfo(device + Data([0])) }
         var badDevice = u16([100]) + u32([6]) + u16([100]) + string("") + u16([0])
         badDevice += u32([4097])
         try rejects("DeviceInfo operations count limit") { _ = try PTPCodec.deviceInfo(badDevice) }
@@ -219,6 +218,83 @@ enum PTPCodecChecks {
         try rejects("StorageIDs count cap") { _ = try PTPCodec.storageIDs(u32([4097])) }
         try rejects("ObjectHandles count cap") { _ = try PTPCodec.handles(u32([1_000_001])) }
         try rejects("ObjectHandles trailing bytes") { _ = try PTPCodec.handles(array32([]) + Data([0])) }
+    }
+
+    static func checkDeviceInfoTails() throws {
+        let standard = deviceDataset()
+        // All suffixes here are synthetic unknown metadata, not captured camera
+        // bytes. The reported 235-byte payload does not identify its actual tail.
+        let opaque = Data([0, 0, 0xFF, 0xD8, 0, 0x80, 0xA5])
+        func check(_ bytes: Data, tail: Data, label: String) throws {
+            let info = try PTPCodec.deviceInfo(bytes)
+            try expect(info.manufacturer == "Panasonic" && info.model == "DC-S1RM2" && info.version == "1.2" && info.operations == PTPCodec.allowedOperations, "DeviceInfo standard prefix preserved: \(label)")
+            try expect(info.standardVersion == 100 && info.vendorExtensionID == 6, "DeviceInfo standard version and vendor ID: \(label)")
+            try expect(info.metadataBytes == bytes.count && info.standardBytes == standard.count && info.trailingBytes == tail.count && info.metadataBytes == info.standardBytes + info.trailingBytes && info.trailingAllZero == tail.allSatisfy { $0 == 0 }, "DeviceInfo tail statistics after SerialNumber: \(label)")
+            let exposesSerial = Mirror(reflecting: info).children.contains {
+                ($0.label ?? "").lowercased().contains("serial") || ($0.value as? String)?.contains("TEST-SERIAL-NOT-EXPOSED") == true
+            }
+            try expect(!exposesSerial && !String(reflecting: info).contains("TEST-SERIAL-NOT-EXPOSED"), "DeviceInfo SerialNumber parsed but not exposed: \(label)")
+        }
+        let tails: [(String, Data)] = [
+            ("empty tail", Data()),
+            ("one zero byte", Data([0])),
+            ("zero padding", Data(repeating: 0, count: 64)),
+            ("opaque tail with leading zeroes", opaque),
+            ("opaque tail with trailing zeroes", Data([0xA5, 0, 0]))
+        ]
+        for (label, tail) in tails {
+            try check(standard + tail, tail: tail, label: label)
+        }
+
+        try expect(PTPCodec.metadataLimit == 4 * 1024 * 1024, "DeviceInfo metadata limit remains 4 MiB")
+        let largeOpaque = Data(repeating: 0xA5, count: PTPCodec.metadataLimit - standard.count)
+        let atLimit = standard + largeOpaque
+        try check(atLimit, tail: largeOpaque, label: "large opaque tail exactly at 4 MiB")
+        try rejects("DeviceInfo opaque suffix exceeds 4 MiB") { _ = try PTPCodec.deviceInfo(atLimit + Data([0xA5])) }
+        try rejects("DeviceInfo zero suffix exceeds 4 MiB") {
+            _ = try PTPCodec.deviceInfo(standard + Data(repeating: 0, count: PTPCodec.metadataLimit - standard.count + 1))
+        }
+
+        // Locate mandatory fields structurally, so suffix acceptance cannot hide
+        // malformed counts or invalid strings anywhere in the standard prefix.
+        var reader = try PTPCodec.Reader(standard)
+        _ = try reader.uint16()
+        _ = try reader.uint32()
+        _ = try reader.uint16()
+        let descriptionStart = reader.offset
+        _ = try reader.string()
+        var stringFields: [(String, Range<Int>)] = [("VendorExtensionDesc", descriptionStart..<reader.offset)]
+        _ = try reader.uint16()
+        for field in ["OperationsSupported", "EventsSupported", "DevicePropertiesSupported", "CaptureFormats", "ImageFormats"] {
+            let countOffset = reader.offset
+            _ = try reader.uint16Array(maxCount: 4096)
+            for count in [UInt32(4097), UInt32.max] {
+                var malformed = standard
+                malformed.replaceSubrange(countOffset..<(countOffset + 4), with: u32([count]))
+                try rejects("DeviceInfo \(field) count \(count) with opaque suffix") { _ = try PTPCodec.deviceInfo(malformed + opaque) }
+            }
+            let incomplete = Data(standard.prefix(countOffset)) + u32([4096]) + opaque
+            try rejects("DeviceInfo \(field) missing array bytes despite suffix") { _ = try PTPCodec.deviceInfo(incomplete) }
+        }
+        for field in ["Manufacturer", "Model", "DeviceVersion", "SerialNumber"] {
+            let start = reader.offset
+            _ = try reader.string()
+            stringFields.append((field, start..<reader.offset))
+        }
+        let invalidStrings: [(String, Data)] = [
+            ("non-NUL terminator", Data([1]) + u16([65])),
+            ("unpaired high surrogate", Data([2]) + u16([0xD800, 0])),
+            ("unpaired low surrogate", Data([2]) + u16([0xDC00, 0])),
+            ("embedded NUL", Data([3]) + u16([0, 65, 0])),
+            ("truncated declared UTF16 length", Data([255]))
+        ]
+        for (field, range) in stringFields {
+            for (label, invalid) in invalidStrings {
+                var malformed = standard
+                malformed.replaceSubrange(range, with: invalid)
+                try rejects("DeviceInfo \(field) \(label) with opaque suffix") { _ = try PTPCodec.deviceInfo(malformed + opaque) }
+            }
+        }
     }
 
     static func checkResponsesAndEvents() throws {
@@ -260,10 +336,10 @@ enum PTPCodecChecks {
     static func checkNativeCompletion() throws {
         let ok = container(type: 3, code: 0x2001, transaction: 991)
         // Synthetic, fully parsed DeviceInfo: only the 235/12-byte callback shape
-        // comes from the build 37 report. These are not camera raw-trace contents.
+        // matches reported diagnostics. These are not camera raw-trace contents.
         // Its bounded vendor-description field supplies the length, not trailing bytes.
         let device = deviceDataset(vendorDescription: "BUILD37 SHAPE ONLY: SYNTHETIC PTP FIXTURE")
-        try expect(device.count == 235 && ok.count == 12, "synthetic build 37 report byte shape, not real trace contents")
+        try expect(device.count == 235 && ok.count == 12, "synthetic 235/12-byte callback shape, not real trace contents")
         let dataFirst = try PTPCodec.completion(first: device, second: ok, operation: 0x1001, maxBytes: 235)
         try expect(dataFirst.responseSlot == "second", "235-byte DeviceInfo first, 12-byte response second")
         try expect(dataFirst.payload == device, "data-first DeviceInfo payload preserved exactly")
@@ -282,6 +358,10 @@ enum PTPCodecChecks {
         let wrappedHandles = container(type: 2, code: 0x1007, transaction: 123, data: handleBytes)
         let objectBytes = objectDataset()
         let wrappedObjectInfo = container(type: 2, code: 0x1008, transaction: 123, data: objectBytes)
+        // Invented opaque suffix; no claim about the real 235-byte dataset tail.
+        let deviceTail = Data([0, 0xA5, 0, 0xFF, 0])
+        let deviceWithTail = device + deviceTail
+        let wrappedDeviceInfo = container(type: 2, code: 0x1001, transaction: 123, data: deviceWithTail)
         let busy = container(type: 3, code: 0x2019)
         let tooLarge = Data(repeating: 0, count: PTPCodec.metadataLimit + 13)
         for responseIsFirst in [false, true] {
@@ -289,6 +369,11 @@ enum PTPCodecChecks {
             func normalize(_ bytes: Data, operation: UInt16, budget: Int) throws -> PTPCodec.Completion {
                 try PTPCodec.completion(first: responseIsFirst ? ok : bytes, second: responseIsFirst ? bytes : ok, operation: operation, maxBytes: budget)
             }
+            let normalizedDevice = try normalize(wrappedDeviceInfo, operation: 0x1001, budget: deviceWithTail.count)
+            try expect(normalizedDevice.payload == deviceWithTail && normalizedDevice.responseSlot == slot && normalizedDevice.response.code == 0x2001 && normalizedDevice.response.transaction == 991 && normalizedDevice.response.parameters.isEmpty, "wrapped DeviceInfo with opaque suffix normalized exactly, response \(slot)")
+            let decodedDevice = try PTPCodec.deviceInfo(normalizedDevice.payload)
+            try expect(decodedDevice.manufacturer == "Panasonic" && decodedDevice.model == "DC-S1RM2" && decodedDevice.version == "1.2" && decodedDevice.operations == PTPCodec.allowedOperations && decodedDevice.standardVersion == 100 && decodedDevice.vendorExtensionID == 6, "normalized wrapped DeviceInfo standard fields, response \(slot)")
+            try expect(decodedDevice.metadataBytes == deviceWithTail.count && decodedDevice.standardBytes == device.count && decodedDevice.trailingBytes == deviceTail.count && !decodedDevice.trailingAllZero, "normalized wrapped DeviceInfo byte statistics exclude container header, response \(slot)")
             let empty = try normalize(Data(), operation: 0x1009, budget: 1)
             try expect(empty.payload.isEmpty && empty.responseSlot == slot && empty.response.code == 0x2001, "empty GetObject data with OK in \(slot) slot")
             let wrappedEmpty = try normalize(container(type: 2, code: 0x1009), operation: 0x1009, budget: 1)
@@ -412,6 +497,7 @@ enum PTPCodecChecks {
         try checkCommands()
         try checkReaders()
         try checkDatasets()
+        try checkDeviceInfoTails()
         try checkResponsesAndEvents()
         try checkNativeCompletion()
         try checkPayloads()
