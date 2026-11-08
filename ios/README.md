@@ -4,16 +4,18 @@
 
 - 以 USB 線和 Apple `ImageCaptureCore` 尋找外接數位相機並接收 JPG/JPEG；相機 USB 模式須依型號實測，Android 使用的 **PC(Tether)** 模式不保證能向 iOS 提供完整目錄。
 - 使用既有 Cam Link Receiver，透過 TLS `:9443`、人工核對伺服器憑證指紋和 SHA-256 回覆確認傳輸。
-- 候選 build 42 已接入 Google Drive／OneDrive 原生登入、資料夾、耐久佇列與遠端核對，以及雙電腦、活動歷史、原圖 ZIP 和設定；公開 OAuth 註冊已配置。仍待整合 CI、內部發佈及帳戶／實機驗收，不能把程式存在當成已可安裝或遠端測試成功。詳見 `IMPLEMENTATION_STATUS.md`。
+- 候選 build 42 已接入 Google Drive／OneDrive 原生登入、資料夾、耐久佇列與遠端核對，以及雙電腦、活動歷史、原圖 ZIP 和設定；公開 OAuth 註冊已配置。來源 `511d74e` 已通過乾淨 Mac 全部離線回歸與完整 iPhoneOS SDK 編譯，內部發佈及真實帳戶／實機驗收分別記錄於 `IMPLEMENTATION_STATUS.md`，不能把編譯成功當成遠端交付成功。
 - ImageCaptureCore 是 iOS 可用的 [Apple 官方相機匯入介面](https://developer.apple.com/documentation/imagecapturecore)；它不是 Android 的原始 USB bulk API。不同相機、韌體和 USB 轉接器仍需逐台實測。
 
-### build 42：原生多目的地與活動整合候選版
+### build 42：原生多目的地與活動整合內部測試版
 
-目前已驗收基線仍是 TestFlight build 41：使用者確認卡內 JPG 可收進 App 並送到電腦。新拍 JPG、Google／OneDrive 真實登入及上傳讀回、兩部電腦與 WebDAV 仍須各自測試，不能以離線回歸替代。
+最新 TestFlight `0.2.25 (42)` 已處理完成並加入原有 `CamLink Internal`，Apple API 確認為 `INTERNAL_ONLY`／`IN_BETA_TESTING`。已驗收的硬體基線仍是 build 41：使用者確認卡內 JPG 可收進 App 並送到電腦。新版新拍 JPG、Google／OneDrive 真實登入及上傳讀回、兩部電腦與 WebDAV 仍須各自測試，不能以離線回歸替代。
 
 候選版的「傳送」可開啟各目的地設定；「紀錄」可指定歷史活動與照片補傳，不把其他活動的失敗一併重試。每個目的地分開排隊及記錄核對證據；本機接收、HTTP 接受和遠端原圖核對不是同一狀態。Google 使用 `drive.file`，只列出 App 可見的檔案／資料夾，不是整個雲碟瀏覽器。
 
 接收完成需等待已排隊檔案與相機關閉結果；拔線、取消或失敗不會冒稱完整接收。iPad 鎖屏或背景不保證 USB 常駐。ZIP 匯出保留完整原圖及 MPF 內容，不重新壓縮。請只分享 App 產生的遮蔽診斷，不提供密碼、配對碼或權杖。
+
+來源 `511d74e` 的 smoke `6af0a7fc24e1ec2375579530` 已完成，內部 TestFlight 建置 `6af0a93269d77cbbeb6352b7` 使用同一確切來源，build 編號為 42，Apple 上傳成功。Codemagic 後處理顯示失敗，已另以 Apple API 加入內部群組並核對可測試狀態，沒有重複上傳。簡短操作次序見 [build 42 實機測試](BUILD42_TEST_GUIDE.md)；先確認 iPad TestFlight 顯示 `(42)`。
 
 ### build 41：MPF／MPO 多影像 JPG 相容候選版
 

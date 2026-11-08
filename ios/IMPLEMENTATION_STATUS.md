@@ -1,10 +1,10 @@
 # Cam Link iOS 功能補齊狀態
 
-更新：2026-11-09（香港時間）。本文件記錄候選 build 42 的來源整合，**不是已可安裝或所有功能已通過實機驗收的宣告**。
+更新：2026-11-09 01:01（香港時間）。`0.2.25 (42)` **已可從 TestFlight 內部群組安裝**；這不代表所有功能已通過實機驗收。
 
 ## 可用基線
 
-現有 TestFlight 是 `0.2.25 (41)`。使用者已確認卡內 MPF JPG 與電腦接收成功；候選版保留成功的標準 PTP、JPEG／MPF 原圖驗證與 Receiver 協定。新拍模式的另一份診斷停在裝置探索，需另測卡內→停止→新拍的生命週期。
+最新內部 TestFlight 是 `0.2.25 (42)`。使用者先前已在 build 41 確認卡內 MPF JPG 與電腦接收成功；新版保留該標準 PTP、JPEG／MPF 原圖驗證與 Receiver 協定。新拍模式仍需另測卡內→停止→新拍的生命週期，不能把 build 41 的卡內成功當成新版新拍驗收。
 
 ## 外部註冊已核對
 
@@ -12,7 +12,7 @@ Google：既有 `work-camera-512615` 專案中的獨立 Cam Link iOS Drive Clien
 
 Microsoft：已在 `gonfoliocontactgmail.onmicrosoft.com` 建立獨立 **Cam Link iOS**。Client ID `16437f88-79e4-499f-8cb3-7f07c9146e0c`、原生回呼 `msauth.hk.camlink.ios://auth`、個人及組織帳戶、五個 Graph 委派 scope 已從下載的已保存 manifest 核對。詳見 `AZURE_REGISTRATION.md` 與 `AzureRegistration.json`。沒有改動 Gonfolio／Android 註冊、建立 client secret、購買服務或授予目錄管理員同意。
 
-## 已完成來源與主畫面接線，待整合驗證
+## 已接入、編譯並分發內部測試的功能
 
 - 共用 OAuth：系統登入、PKCE、state／精確 callback、Keychain、刷新／取消與 redirect 保護；Google SDK 和 Microsoft 共用互動登入鎖。
 - Google Drive：正式 SDK 登入、資料夾選建、活動目的地、整檔原圖、耐久分段佇列、暫停／續傳／重試、MD5／SHA 或整份下載核對、獨立紀錄。
@@ -26,13 +26,21 @@ Microsoft：已在 `gonfoliocontactgmail.onmicrosoft.com` 建立獨立 **Cam Lin
 
 ## 整合修正與已取得的驗證
 
-真正 Mac 已分別通過 lifecycle 179 項、OAuth 126 項、回饋 138 項、Google 78 項注入式檢查，以及雙電腦、活動／真實模型和 ZIP 原圖保留回歸。這些是離線測試，不是帳戶或硬體端到端成功。
+來源 `511d74e` 的乾淨 Codemagic smoke `6af0a7fc24e1ec2375579530` 已於 2026-11-08 16:52 UTC 完成，狀態為 `finished`。真正 Mac 同一輪通過 lifecycle 179 項、OAuth 126 項、回饋 138 項、Google 78 項、OneDrive 注入式檢查，以及雙電腦、活動／真實模型和 ZIP 原圖保留回歸。PTP、JPEG、MPF 回歸亦成功。這些是離線測試，不是帳戶或硬體端到端成功。
 
 整合修正涵蓋：接收完成必須等待 drain 與原生 close；中斷維持未完成；成功回條必須先持久化；每個目的地保留獨立證據；政策暫停不覆寫使用者暫停；歷史重試精確限定照片與場次；request 套用最新網路限制，session 不凍結舊設定。首頁回饋欄位和檔案保護 SDK 名稱已修正。
 
-OneDrive 新增的政策取消測試曾因重用已登出的 OAuthCoordinator 而在進入 transport 前失敗；mock vault 重新寫入不能清除登出 tombstone。測試已改以新 coordinator 表達冷啟動，原本的 transport-start、取消和重試斷言不變，待新一輪 Mac 回歸確認。
+OneDrive 新增的政策取消測試曾因重用已登出的 OAuthCoordinator 而在進入 transport 前失敗；mock vault 重新寫入不能清除登出 tombstone。測試已改以新 coordinator 表達冷啟動，原本的 transport-start、取消和重試斷言不變；上述乾淨 Mac 回歸已確認通過。
 
-46 份 Swift 靜態語法、腳本語法與 source metadata 檢查通過；這不等於完整 SDK 編譯通過。先前臨時 Mac 遠端工作階段已結束，接續由提交後的乾淨 `ios-smoke` 執行全部回歸及 Apple SDK 編譯。`ios/run_parity_tests.sh` 同時納入 smoke 和 signed workflow，原有 PTP、JPEG、MPF 回歸保留；全部成功後才啟動內部 TestFlight。尚未宣稱 build 42 已分發。
+完整 App 已在上述 smoke 使用 iPhoneOS SDK、正式 Google Sign-In 和 ZIPFoundation 套件編譯成功，並對最終 `.app/Info.plist` 通過 metadata 檢查，日誌輸出 `unsigned iphoneos build ok`。Swift 5 模式仍有 ObservableObject actor conformance／Sendable 警告；不能宣稱 Swift 6 嚴格模式無警告。
+
+同一確切 commit `511d74e` 的內部建置 `6af0a93269d77cbbeb6352b7` 已完成測試、簽名 IPA 與最終 metadata 檢查。Apple uploader 於 2026-11-08 16:58:54 UTC 回覆 `UPLOAD SUCCEEDED with no errors`，版本 `0.2.25`、build `42`。
+
+2026-11-08 17:00 UTC 已以既有授權 App Store Connect API 確認：`processingState=VALID`、`buildAudienceType=INTERNAL_ONLY`、`usesNonExemptEncryption=false`、未過期。已加入原有 `CamLink Internal`（沒有新建群組、增加測試者或公開發佈），再次核對 membership 且 `internalBuildState=IN_BETA_TESTING`、外部測試不適用。可於 iPad TestFlight 更新。
+
+Codemagic 的簽名／上傳成功，但其後處理顯示失敗；沒有因此重傳或使用同一 build 編號重建。上述群組加入與最終可測試狀態以 Apple API 的實際結果為準，不宣稱該 workflow 全部綠燈。
+
+舊臨時 SSH 金鑰與來源封裝已清理，私人照片與工作筆記沒有提交。操作次序見 [build 42 實機測試](BUILD42_TEST_GUIDE.md)。
 
 ## 必須保留的能力界線
 

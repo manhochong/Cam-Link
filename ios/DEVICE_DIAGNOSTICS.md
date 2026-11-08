@@ -1,4 +1,4 @@
-# DC-S1RM2／iPad USB 接收診斷：build 36–40
+# DC-S1RM2／iPad USB 接收診斷：build 36–42
 
 使用者提供的 `CamLink-camera-diagnostics.txt` 顯示 App 0.2.25（36），iPadOS 26.5.2。三次相機權限及內容授權均成功，三次 `SESSION_OPEN` 均成功；三次 `BASELINE` 都是 0 個物件。日誌有 56 次 16-byte PTP 事件，但沒有 `ITEMS_ADDED` 或 `DOWNLOAD_BEGIN`。
 
@@ -52,9 +52,19 @@ build 40 候選修正用主 JPEG marker 結構定位 EOI，跳過 metadata 區�
 
 候選版紀錄頁會顯示真實接收失敗與匯出診斷入口，不只顯示「尚未收到」；確定的格式拒絕不再重抓同一張大型照片六次。每次開始接收會清空上一場 rolling log，保留本場初始化和首幾個 JPG 結果摘要，避免全卡重試掩蓋關鍵證據。Codemagic build 40 `6af0478124e1ec23755774f1` 已在 macOS runner 真正執行 `PASS: 59 checks (generated fixtures; no camera-capture cause inferred)`，包含 ImageIO 生成的 baseline／progressive JPEG、完整解碼、允許填充與截斷／錯誤／未知尾端拒絕。完整 signed IPA 與最終相機／本機網路用途及 QR metadata 檢查通過，Publishing 明示 version `0.2.25`、code `40`；Apple uploader 10:00:27 UTC 回覆 `UPLOAD SUCCEEDED with no errors`，10:02 UTC 已核實 TestFlight `Testing`、既有 `CamLink Internal` 群組及原來 1 位測試者。可更新至 `0.2.25 (40)`，但實機收檔仍待驗證。使用者若能提供安全、未編輯的相機原始 JPG，可獨立確認影像的實際起訖與尾端，不必把原圖公開上傳或提交 GitHub。
 
+## build 41 實機基線與 build 42 整合
+
+使用者已確認 build 41 能接收卡內 JPG 並送到電腦，回報 5 張成功、0 失敗。MPF 原圖驗證保留整份 bytes，並非只截取第一張 JPEG。這是指定 DC-S1RM2／iPad 組合的卡內接收及電腦路徑證據，不代表新拍事件、雙電腦或雲端路徑已驗收。
+
+候選 build 42 改用 fresh browser 和不可變 delegate owner，處理停止後重新探索；接收結束以明確 drain、零待收／失敗、無 sticky error 及原生關閉成功為完成條件。拔線、timeout 或錯誤必須顯示未完成，且先保留計數。沒有加入廠商寫入、刪卡或拍攝命令。
+
+2026-11-08 16:52 UTC，來源 `511d74e` 的乾淨 Codemagic smoke `6af0a7fc24e1ec2375579530` 完成全部離線模組回歸、完整 iPhoneOS SDK 編譯與最終 metadata 檢查。相機 lifecycle 179 項通過，仍不等於本候選版已在 USB 硬體成功接收新拍 JPG。下一次在新 TestFlight 版本測卡內→停止→新拍，保持 App 前景，另行確認雲端與電腦目的地的獨立核對紀錄。
+
+同一來源的簽名 build 42 已於 16:58:54 UTC 成功上傳；17:00 UTC 由 Apple API 確認 `VALID`、`INTERNAL_ONLY`，已加入既有 `CamLink Internal` 且為 `IN_BETA_TESTING`。可以更新至 `0.2.25 (42)` 後按 [實機測試指引](BUILD42_TEST_GUIDE.md) 驗收。Codemagic 的後處理顯示失敗，已另以 Apple API 確認加入群組及最終狀態，不以後處理紅燈推斷上傳失敗，也沒有重複上傳。
+
 ## 其他相機的支援範圍
 
-iOS 目前沒有完成實機驗收的相機型號清單；DC-S1RM2 也仍是修正候選版測試中。標準 PTP 讀取不按品牌限制，但相機必須提供標準物件查詢／讀取能力，USB 模式與 iPadOS 也須相容。讀取卡內既有 JPG 與 USB 連線中拍攝新 JPG 是兩項不同能力，不能以其中一項成功推斷另一項已支援。
+iOS 目前沒有全面完成實機驗收的相機型號清單；DC-S1RM2 只有上述特定卡內接收與電腦路徑的使用者確認。標準 PTP 讀取不按品牌限制，但相機必須提供標準物件查詢／讀取能力，USB 模式與 iPadOS 也須相容。讀取卡內既有 JPG 與 USB 連線中拍攝新 JPG 是兩項不同能力，不能以其中一項成功推斷另一項已支援。
 
 Android `MainActivity.java` 的既有文案記錄 LUMIX S1、S1 II、S1R II 有實拍紀錄；Sony、Canon、Nikon、Fujifilm 明確標為實驗接收。`CameraProfile.java` 為這些品牌提供 USB／部分事件解析，但這不是所有機型的相容保證，也不是 iOS 已支援的證據。若要評估其他相機，需確切型號、韌體及 USB 模式，再分別測卡內匯入與新拍接收。此結論以既有專案文案與原始碼為基準，不是品牌廠商對 Cam Link 的認證。
 
