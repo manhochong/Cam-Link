@@ -10,7 +10,7 @@ Apple 的 `requestSendPTPCommand` 在 iOS／iPadOS 13 起可用，completion 型
 
 Apple 的 `requestEnableTethering()` 僅適用 macOS，不能拿來解決 iPad 問題。`tetheredCaptureEnabled` 是可讀狀態，不是 iPad 上可任意設定的開關。[3] Panasonic 的 DC-S1RM2 指南記錄 PC(Tether) 與 LUMIX Tether 的 PC 使用流程，但並未保證 iPad 原生目錄會採用同一方式更新。[4]
 
-下一個候選版本會同時修正黑底按鈕文字不可見及 iPad 直向比例。收檔端補上有界限、序列化的標準 PTP 唯讀查詢／下載路徑，並記錄事件代碼、handle、目錄及回應碼。不發送刪除、拍攝、格式化、重設或相機屬性變更命令。仍須在同一 iPad／相機實測後，才能確認實機照片接收已恢復。
+build 37 起已加入黑底按鈕文字與 iPad 直向比例修正。收檔端補上有界限、序列化的標準 PTP 唯讀查詢／下載路徑，並記錄事件代碼、handle、目錄及回應碼。不發送刪除、拍攝、格式化、重設或相機屬性變更命令。仍須在同一 iPad／相機實測後，才能確認實機照片接收已恢復。
 
 多雲端傳送也是未完成的移植範圍：build 36 只有本機保存與電腦 Receiver。build 37 已加入 WebDAV 上傳／讀回核對及批量系統分享，但 Google Drive／OneDrive 直接登入仍需原生 OAuth 設定；不能以無效按鈕冒充 Android 功能相等。
 
@@ -36,7 +36,9 @@ Codemagic build 38 `6af03f0f24e1ec237557723a` 已實際在 macOS runner 執行�
 
 build 39 候選版只移除 DeviceInfo 標準欄位後的 exact-end 限制：所有標準欄位仍完整解析，保留 4 MiB metadata 總上限、陣列數量／剩餘大小檢查及 UTF-16 結尾／代理對檢查。未解釋的尾端不會當作 operation、handle 或命令，也不儲存或輸出內容。新增 `PTP_DEVICE_INFO_LAYOUT` 記錄 totalBytes、standardBytes、trailingBytes、zero-filled／opaque 分類、StandardVersion 和 vendor ID，仍不公開序號。StorageIDs、ObjectHandles、ObjectInfo、response container、照片大小、JPG 驗證與 SHA-256 保持原有嚴格檢查；不新增相機設定或刪除命令。
 
-回歸測試使用合成的零尾端與非零尾端，並涵蓋完整標準欄位截斷、非法字串及超過 metadata 上限。這些資料不是實機 235 bytes 的副本。build 39 尚待 macOS runner 實際測試、簽名建置及 TestFlight 指派；實機是否能列出／下載照片也尚未確認。
+回歸測試使用合成的零尾端與非零尾端，並涵蓋完整標準欄位截斷、非法字串及超過 metadata 上限。這些資料不是實機 235 bytes 的副本。Codemagic `6af0428a24e1ec237557736a` 已實際完成 `PTPCodecChecks: 575 offline checks passed; no camera operations performed.`；完整 Apple SDK archive／IPA export 和最終 metadata 檢查也通過。Apple uploader 在 09:39:19 UTC 回覆 `UPLOAD SUCCEEDED with no errors`。2026-11-08 09:43 UTC 已確認 App Store Connect build 39 為 `Testing`，已加入 `CamLink Internal`，群組仍只有原來 1 位測試者，繁體中文 What to Test 已儲存。可在 TestFlight 更新至 `0.2.25 (39)`；列出及下載照片仍待實機確認。
+
+下一次先測卡內既有 JPG，建立基本列檔／下載的證據，再測新拍 JPG。若仍失敗，分享 build 39 的新報告與相機 USB 設定頁／模式。報告中的 `mode=接收新拍 JPG` 是 App 模式，不是相機的 PC(Tether)／PC(Storage) USB 模式；這項相機設定目前仍未提供，不應臆測。
 
 ## 其他相機的支援範圍
 
