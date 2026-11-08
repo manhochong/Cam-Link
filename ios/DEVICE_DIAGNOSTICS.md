@@ -12,9 +12,15 @@ Apple 的 `requestEnableTethering()` 僅適用 macOS，不能拿來解決 iPad �
 
 下一個候選版本會同時修正黑底按鈕文字不可見及 iPad 直向比例。收檔端補上有界限、序列化的標準 PTP 唯讀查詢／下載路徑，並記錄事件代碼、handle、目錄及回應碼。不發送刪除、拍攝、格式化、重設或相機屬性變更命令。仍須在同一 iPad／相機實測後，才能確認實機照片接收已恢復。
 
-多雲端傳送也是未完成的移植範圍：目前 iOS 只有本機保存與電腦 Receiver。Google Drive、OneDrive 及 WebDAV 必須提供真正登入／憑證和可靠上傳流程，不能以無效按鈕冒充 Android 功能相等。
+多雲端傳送也是未完成的移植範圍：build 36 只有本機保存與電腦 Receiver。build 37 已加入 WebDAV 上傳／讀回核對及批量系統分享，但 Google Drive／OneDrive 直接登入仍需原生 OAuth 設定；不能以無效按鈕冒充 Android 功能相等。
 
-2026-11-08 Codemagic smoke `6af039d024e1ec2375577094` 已在 Mac runner 完成 `PTPCodecChecks: 431 offline checks passed; no camera operations performed.`，並完成 iPhone SDK unsigned 編譯。此建置驗證 PTP reader 與 codec，還未包含完整接收整合與雲端頁；沒有 USB 硬體測試。完整候選 build 37 的簽名建置與實機驗收是後續步驟。
+2026-11-08 Codemagic smoke `6af039d024e1ec2375577094` 已在 Mac runner 完成 `PTPCodecChecks: 431 offline checks passed; no camera operations performed.`，並完成 iPhone SDK unsigned 編譯。完整候選 build 37 的 Codemagic 建置 `6af03b8f24e1ec237557710f` 亦已通過 codec 測試、所有新 Swift 檔案的 Apple SDK 編譯、簽名 IPA 匯出和最終 metadata 檢查，Apple uploader 回覆 `UPLOAD SUCCEEDED with no errors`。App Store Connect 已處理完成，build 37 為 `Testing`，已加入 `CamLink Internal`。可在 TestFlight 更新至 `0.2.25 (37)`；沒有 USB 硬體或 WebDAV 遠端實測，仍需使用者驗證。
+
+## 其他相機的支援範圍
+
+iOS 目前沒有完成實機驗收的相機型號清單；DC-S1RM2 也仍是修正候選版測試中。標準 PTP 讀取不按品牌限制，但相機必須提供標準物件查詢／讀取能力，USB 模式與 iPadOS 也須相容。讀取卡內既有 JPG 與 USB 連線中拍攝新 JPG 是兩項不同能力，不能以其中一項成功推斷另一項已支援。
+
+Android `MainActivity.java` 的既有文案記錄 LUMIX S1、S1 II、S1R II 有實拍紀錄；Sony、Canon、Nikon、Fujifilm 明確標為實驗接收。`CameraProfile.java` 為這些品牌提供 USB／部分事件解析，但這不是所有機型的相容保證，也不是 iOS 已支援的證據。若要評估其他相機，需確切型號、韌體及 USB 模式，再分別測卡內匯入與新拍接收。此結論以既有專案文案與原始碼為基準，不是品牌廠商對 Cam Link 的認證。
 
 ## References
 

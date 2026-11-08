@@ -1,6 +1,6 @@
 # iOS WebDAV 原圖備份
 
-這是獨立的真實 WebDAV 目的地，不是 Google Drive／Microsoft OneDrive OAuth 的替代或假登入。候選 build 37 已在 App 和傳送頁接入設定、獨立工作佇列及明確啟用後的前景自動傳送；尚待完整 Apple SDK 編譯和有效 WebDAV 伺服器實测。
+這是獨立的真實 WebDAV 目的地，不是 Google Drive／Microsoft OneDrive OAuth 的替代或假登入。候選 build 37 已在 App 和傳送頁接入設定、獨立工作佇列及明確啟用後的前景自動傳送，完整 Apple SDK 編譯與 TestFlight 內部分發均已完成；有效 WebDAV 伺服器仍未實測。
 
 ## iPad 使用方式
 
@@ -82,6 +82,6 @@ if webDAV.autoUpload && webDAV.config != nil && scenePhase == .active {
 
 固定錯誤涵蓋格式／密碼空值、Keychain 不可用、JSON／磁碟不可用、本機原圖改變、TLS／網路問題、HTTP 重新導向／401／403／404／409、遠端 hash mismatch 及 412 異內容碰撞。佇列寫入失敗後停止進一步網路操作；保留 JSON 檔處理，不清空歷史。
 
-新增檔案已通過 `/tmp/camlink-swift-parser` 的 tree-sitter Swift 語法解析及 `git diff --check`。這不等同於 Apple SDK 編譯或裝置測試。沒有實際 WebDAV 帳密，未進行遠端 PUT／GET，也沒有聲稱遠端已驗證。
+新增檔案已通過 tree-sitter Swift 語法解析及 `git diff --check`，完整 App 亦在 Codemagic 建置 `6af03b8f24e1ec237557710f` 通過 Apple SDK 編譯與簽名封裝。App Store Connect build 37 為 `Testing` 且已加入 `CamLink Internal`。沒有實際 WebDAV 帳密，未進行遠端 PUT／GET，也沒有聲稱遠端已驗證。
 
 整合後應在有效憑證的受控 WebDAV 測試：201 原圖讀回、200／204 PUT、412 相同與不同內容、PUT／GET redirect、401／403、壞憑證、網路中斷、磁碟滿、重新啟動 uploading、A→B→A 目的地與金鑰鏈恢復，以及 WebDAV 失敗時相機 JPG 是否照常落盤。Google 與 Microsoft OAuth 仍需要真實 provider app／redirect 配置；本次沒有假認證，也沒有新增其他雲端提供者。

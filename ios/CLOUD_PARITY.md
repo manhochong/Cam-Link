@@ -2,7 +2,7 @@
 
 Android 的傳送選項有兩種不同的能力。Google Drive、OneDrive、WebDAV 會由 Cam Link 直接上傳完整 JPG；Dropbox、Box、Google Photos、Flickr 則是把 JPG 交給已安裝的服務 App 分享。打開分享介面不等於雲端備份成功，也不能標為已核對。
 
-目前已發布的 iOS build 36 只有 App 本機保存與單一電腦 Receiver。Google Drive、OneDrive、WebDAV 尚未完整移植。Android 可配對兩部電腦；iOS 目前也未達到這一項相同能力。
+2026-11-08 iOS build 37 已完成編譯、簽名和 TestFlight 內部分發，加入 WebDAV 設定與原圖上傳／讀回核對，以及批量系統分享。WebDAV 尚未以實際遠端帳密測試，Google Drive／OneDrive 直接登入仍未完成；現有單一電腦 Receiver 亦尚未擴充為 Android 的兩部電腦配對。不能宣稱已全面功能相等。
 
 WebDAV 可直接以原生 Swift 實作，不需要 Google 或 Microsoft 應用程式註冊。輸入已有、可寫入的 HTTPS 資料夾網址、使用者名稱及應用程式密碼。憑證需保存在 iOS Keychain；設定儲存成功不代表遠端憑證測試通過。傳送使用 create-only PUT，拒絕重新導向；下載遠端檔案回來，以檔案大小及 SHA-256 核對後才標為完成。同名但不同內容不可覆寫。預設不啟用自動上傳，且 WebDAV 狀態與電腦 Receiver 狀態分開保存。
 
