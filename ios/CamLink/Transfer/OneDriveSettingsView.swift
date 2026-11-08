@@ -14,6 +14,7 @@ struct OneDriveSettingsView: View {
     @State private var browsePath: [OneDriveFolder] = []
     @State private var localBusy = false
     @State private var note = ""
+    @State private var reportURL: URL?
     @State private var confirmImport = false
     @State private var confirmDisconnect = false
     init(photos: [ReceivedJPEG], albumName: String = "Cam Link") {
@@ -123,6 +124,10 @@ struct OneDriveSettingsView: View {
                     LabeledContent("OneDrive 已核對", value: "\(store.verifiedCount)")
                     LabeledContent("未核對待傳", value: "\(store.pendingCount)")
                     LabeledContent("需處理", value: "\(store.failedCount)")
+                    Button("準備已遮蔽憑證的診斷 JSON") { prepareReport() }
+                    if let reportURL { ShareLink("分享 OneDrive 診斷報告", item: reportURL) }
+                    Text("報告含活動／檔名、雜湊與傳送狀態；不含電郵、權杖、本機路徑或續傳網址。仍可能是私人工作資料，只分享給可信任的人。")
+                        .font(.caption)
                     ForEach(store.jobs.reversed()) { job in
                         VStack(alignment: .leading, spacing: 5) {
                             Text(job.originalName).font(.headline)
@@ -161,6 +166,24 @@ struct OneDriveSettingsView: View {
                 Button("登出並停止自動加入", role: .destructive) { Task { await store.disconnect(); folders = []; browsePath = [] } }
             } message: { Text("刪除本帳戶的本機憑證與續傳網址，保留本機照片、工作歷史及遠端檔案。這不是撤銷 Microsoft 授權或清除瀏覽器登入。") }
         }
+    }
+    @MainActor private func prepareReport() {
+        let rows: [[String: Any]] = store.jobs.map { job in
+            ["id": job.id, "photoID": job.photoID, "name": job.originalName,
+             "album": job.albumName, "bytes": job.bytes, "offset": job.offset,
+             "state": job.state.rawValue, "attempts": job.attempts,
+             "verification": job.verification ?? "", "sha256": job.sha256]
+        }
+        let value: [String: Any] = ["version": 1, "provider": "OneDrive",
+            "appBuild": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "",
+            "accountConfigured": store.account != nil, "verified": store.verifiedCount,
+            "pending": store.pendingCount, "failed": store.failedCount, "jobs": rows]
+        do {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("CamLink-OneDrive-results.json")
+            let data = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: url, options: .atomic)
+            reportURL = url; note = "診斷報告已準備，這不是遠端上傳驗收。"
+        } catch { reportURL = nil; note = "無法準備診斷報告，原圖不受影響。" }
     }
     @MainActor private func reloadFolders() async {
         guard store.account != nil, !localBusy else { return }

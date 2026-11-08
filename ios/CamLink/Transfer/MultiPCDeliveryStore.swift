@@ -349,12 +349,13 @@ final class MultiPCDeliveryStore: ObservableObject {
         retryWake?.cancel()
     }
     /// Retries ONLY existing jobs for the unchanged current receiver; no remapping/re-upload of verified jobs.
-    func retryFailed(slot: PCSlotID? = nil) {
+    func retryFailed(slot: PCSlotID? = nil, sessionID: String? = nil) {
         do {
             var next = snapshot
             for index in next.jobs.indices where next.jobs[index].state == .failed || next.jobs[index].state == .retry {
                 let job = next.jobs[index]
-                guard (slot == nil || job.destination.slot == slot), destinationIsCurrent(job) else { continue }
+                guard (slot == nil || job.destination.slot == slot),
+                      (sessionID == nil || job.sessionID == sessionID), destinationIsCurrent(job) else { continue }
                 next.jobs[index].state = .waiting
                 next.jobs[index].attempts = 0
                 next.jobs[index].nextAttemptAt = nil
@@ -426,7 +427,13 @@ final class MultiPCDeliveryStore: ObservableObject {
                         } else { value.state = .failed; value.nextAttemptAt = nil }
                     }
                 } catch { report(error); activeTransfer = nil; break }
-                if issue == .cancelled { activeTransfer = nil; break }
+                if issue == .cancelled {
+                    activeTransfer = nil
+                    // A newly blocked slot must not stall a different eligible receiver.
+                    if !Task.isCancelled && !isPaused && foregroundActive,
+                       !(allowsTransfer?(job.destination.slot) ?? true) { continue }
+                    break
+                }
             }
             activeTransfer = nil
         }
@@ -476,7 +483,7 @@ final class MultiPCDeliveryStore: ObservableObject {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             let data = try encoder.encode(next)
             #if os(iOS)
-            try data.write(to: archiveURL, options: [.atomic, .completeUntilFirstUserAuthentication])
+            try data.write(to: archiveURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             #else
             try data.write(to: archiveURL, options: .atomic)
             #endif

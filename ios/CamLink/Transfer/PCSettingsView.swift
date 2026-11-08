@@ -90,7 +90,7 @@ struct PCSettingsView: View {
                             .disabled(photos.isEmpty || !pair.selectedPair.isReady)
                     }
                     Button("重試此電腦未完成工作") {
-                        delivery.retryFailed(slot: pair.selectedSlot)
+                        delivery.retryFailed(slot: pair.selectedSlot, sessionID: sessionID.isEmpty ? nil : sessionID)
                         Task { await delivery.pump() }
                     }.disabled(!pair.selectedPair.isReady || delivery.isPaused)
                     if delivery.running { ProgressView("等待 Receiver SHA-256 核對") }

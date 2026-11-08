@@ -25,6 +25,8 @@ struct RootView: View {
     @State private var previewAspectRatio: CGFloat = 4.0 / 3.0
     @State private var storageAlert = false
     @State private var pendingMode: CameraCaptureService.ReceiveMode = .newPhotos
+    @State private var showSessionRetry = false
+    @State private var retryMessage = ""
 
     private var transferAlbum: SessionAlbumRecord? { session.album(id: transferAlbumID ?? session.sessionId) }
     private var transferPhotos: [ReceivedJPEG] { transferAlbum?.photos ?? [] }
@@ -51,7 +53,10 @@ struct RootView: View {
                 remoteNames: Dictionary(uniqueKeysWithValues: transferPhotos.map { ($0.id, session.remoteName(for: $0)) }))
         }
         .sheet(isPresented: $showGoogle) {
-            GoogleDriveSettingsView(photos: transferPhotos, albumName: { transferName }).environmentObject(google)
+            NavigationStack {
+                GoogleDriveSettingsView(photos: transferPhotos, albumName: { transferName }).environmentObject(google)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { showGoogle = false } } }
+            }
         }
         .sheet(isPresented: $showOneDrive) {
             OneDriveSettingsView(photos: transferPhotos, albumName: transferName).environmentObject(oneDrive)
@@ -72,6 +77,31 @@ struct RootView: View {
             Button("取消", role: .cancel) {}
             Button("已檢查，繼續接收") { runtime.startReceiving(pendingMode) }
         } message: { Text(feedback.storageStatus.text) }
+        .confirmationDialog("只重試「\(transferName)」已失敗的工作", isPresented: $showSessionRetry, titleVisibility: .visible) {
+            Button("電腦 1／電腦 2") {
+                pc.retryFailed(sessionID: transferAlbum?.id ?? session.sessionId)
+                Task { await pc.pump() }
+                retryMessage = "只重試此活動原有的電腦工作；不變更配對目的地。"
+            }
+            Button("Google Drive") {
+                google.retryFailed(photos: transferPhotos)
+                Task { await google.pump() }
+                retryMessage = "只重試此活動原有的 Google Drive 工作；手動暫停仍保留。"
+            }
+            Button("OneDrive") {
+                oneDrive.retryFailed(photos: transferPhotos)
+                Task { await oneDrive.pump() }
+                retryMessage = "只重試此活動原有的 OneDrive 工作；手動暫停仍保留。"
+            }
+            Button("WebDAV／NAS") {
+                webDAV.retryFailed(photos: transferPhotos)
+                Task { await webDAV.uploadPending() }
+                retryMessage = "只重試此活動與目前 WebDAV 目的地相符的失敗工作。"
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只處理選定活動既有的原目的地工作；已核對原圖不重傳，其他活動不受影響。需要登入或手動繼續時，請開啟該目的地設定。")
+        }
         .onOpenURL { url in
             if google.handleCallback(url) { return }
             guard url.scheme?.lowercased() == "camlink" else { return }
@@ -92,7 +122,9 @@ struct RootView: View {
         switch tab {
         case 1:
             SessionHistoryView(session: session, isCameraReceiving: { camera.browsing || camera.sessionClosing || !camera.canStart },
-                onDelivery: openDelivery, onRetryDelivery: openDelivery)
+                onDelivery: openDelivery, onRetryDelivery: { album in
+                    transferAlbumID = album.id; tab = 2; showSessionRetry = true
+                })
         case 2:
             ScrollView { transfers.padding(24).frame(maxWidth: 760).frame(maxWidth: .infinity) }
         case 3:
@@ -143,7 +175,7 @@ struct RootView: View {
         VStack(alignment: .leading, spacing: 18) {
             if let banner = feedback.banner {
                 HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) { Text(banner.title).bold(); Text(banner.text).font(.caption) }
+                    VStack(alignment: .leading, spacing: 4) { Text(banner.title).bold(); Text(banner.detail).font(.caption) }
                     Spacer()
                     Button { feedback.dismissBanner() } label: { Image(systemName: "xmark.circle.fill") }
                 }.camLinkCard()
@@ -217,6 +249,9 @@ struct RootView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("傳送目的地").font(.largeTitle.bold())
             Text(transferName).font(.headline)
+            if !retryMessage.isEmpty { Text(retryMessage).font(.footnote).foregroundStyle(CamLinkTheme.accent) }
+            Button("只重試此活動已失敗的工作…") { showSessionRetry = true }
+                .buttonStyle(.bordered).disabled(transferPhotos.isEmpty)
             Text("\(transferPhotos.count) 張已存原圖。開啟目的地後，仍須確認帳戶、資料夾與手動補傳範圍。")
                 .font(.footnote).foregroundStyle(.secondary)
             if transferAlbumID != nil && transferAlbumID != session.sessionId {

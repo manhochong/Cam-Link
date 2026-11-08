@@ -140,17 +140,51 @@ final class WebDAVStore: ObservableObject {
 
     /// Explicit retry only; failed jobs are never continuously retried in the upload loop.
     func retryFailed() {
+        _ = retryFailed(matching: { _ in true })
+    }
+
+    /// Explicit selected-photo retry, bound to both ID and canonical full local source path.
+    @discardableResult
+    func retryFailed(photos: [ReceivedJPEG]) -> Int {
+        let root = documentsURL.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        var selected: [String: Set<String>] = [:]
+        for photo in photos where photo.url.isFileURL {
+            let path = photo.url.resolvingSymlinksInPath().standardizedFileURL.path
+            guard path.hasPrefix(root) else { continue }
+            selected[photo.id, default: []].insert(path)
+        }
+        return retryFailed(matching: { job in
+            let path = self.documentsURL.appendingPathComponent(job.localRelativePath)
+                .resolvingSymlinksInPath().standardizedFileURL.path
+            return path.hasPrefix(root) && selected[job.photoID]?.contains(path) == true
+        })
+    }
+
+    private func retryFailed(matching selected: (WebDAVJob) -> Bool) -> Int {
         guard let configurationID = config?.id, storageReady else {
             message = "請先儲存要重試的 WebDAV 目的地"
-            return
+            return 0
         }
-        for index in jobs.indices where jobs[index].configurationID == configurationID && jobs[index].state == .failed {
-            jobs[index].state = .pending
-            jobs[index].error = nil
-            jobs[index].verifiedAt = nil
-            jobs[index].updatedAt = Date()
+        var candidate = jobs
+        var count = 0
+        for index in candidate.indices where candidate[index].configurationID == configurationID
+            && candidate[index].state == .failed && selected(candidate[index]) {
+            candidate[index].state = .pending
+            candidate[index].error = nil
+            candidate[index].verifiedAt = nil
+            candidate[index].updatedAt = Date()
+            candidate[index].attempts = 0
+            count += 1
         }
-        if saveCurrentState() { message = "失敗項目已排入佇列；未傳送驗證，請開始上傳" }
+        guard count > 0 else { return 0 }
+        do { try writeSnapshot(config: config, autoUpload: autoUpload, jobs: candidate) }
+        catch {
+            storageReady = false; activeTransfer?.cancel(); message = WebDAVFailure.storage.localizedDescription
+            return 0
+        }
+        jobs = candidate
+        message = "失敗項目已排入佇列；未傳送驗證，請開始上傳"
+        return count
     }
 
     /// ReceivedJPEG is a locally validated original, not a thumbnail or a PC receipt.
@@ -236,12 +270,9 @@ final class WebDAVStore: ObservableObject {
                 }, onCancel: {
                     transfer.cancel()
                 })
-                if let current = jobs.firstIndex(where: { $0.id == job.id }) {
-                    jobs[current].state = .verified
-                    jobs[current].verifiedAt = Date()
-                    jobs[current].updatedAt = Date()
-                    jobs[current].error = nil
-                }
+                guard !transfer.isCancelled, !Task.isCancelled, config?.id == configurationID else { throw CancellationError() }
+                // Build and save a candidate without publishing any verified job/receipt first.
+                guard commitVerified(jobID: job.id) else { break }
                 verified += 1
             } catch {
                 let cancelled = transfer.isCancelled || Task.isCancelled || error is CancellationError
@@ -263,12 +294,37 @@ final class WebDAVStore: ObservableObject {
                 break
             }
             activeTransfer = nil
-            guard saveCurrentState() else { break }
         }
         if storageReady, config?.id == configurationID, !Task.isCancelled, failures == 0 {
             if verified > 0 { message = "WebDAV 已以 GET 大小與 SHA-256 核對 \(verified) 張原圖" }
             else if pendingCount == 0 { message = "沒有待傳 JPG；既有驗證數量請見下方" }
         }
+    }
+
+    /// A successful PUT/GET is not a receipt until its verified snapshot is durable.
+    private func commitVerified(jobID: String) -> Bool {
+        guard storageReady, let current = jobs.firstIndex(where: { $0.id == jobID }), jobs[current].state == .uploading else {
+            storageReady = false
+            activeTransfer?.cancel()
+            message = WebDAVFailure.storage.localizedDescription
+            return false
+        }
+        var candidate = jobs
+        let now = Date()
+        candidate[current].state = .verified
+        candidate[current].verifiedAt = now
+        candidate[current].updatedAt = now
+        candidate[current].error = nil
+        do { try writeSnapshot(config: config, autoUpload: autoUpload, jobs: candidate) }
+        catch {
+            // Keep the previous nonverified published/durable state and all originals.
+            storageReady = false
+            activeTransfer?.cancel()
+            message = WebDAVFailure.storage.localizedDescription
+            return false
+        }
+        jobs = candidate
+        return true
     }
 
     @discardableResult

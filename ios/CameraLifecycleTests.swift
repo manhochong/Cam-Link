@@ -172,6 +172,111 @@ enum CameraLifecycleChecks {
         try expect(!discoveryStop.admitDevice(id: ids.session, browserID: ids.browser, deviceID: ids.camera), "late discovery tick after stop cannot open")
     }
 
+    static func expectEnd(_ result: CameraReceiveEnd?, received: Int, pending: Int,
+                          failed: Int, clean: Bool, _ label: String) throws {
+        guard let result else { throw Failure(description: "FAIL: \(label): missing receipt") }
+        try expect(result.received == received, "\(label): received snapshot")
+        try expect(result.pending == pending, "\(label): pending snapshot")
+        try expect(result.failed == failed, "\(label): failed snapshot")
+        try expect(result.clean == clean, "\(label): clean requires confirmed drain/close")
+    }
+
+    static func receiveCompletionReceipts() throws {
+        var clean = CameraReceiveCompletion()
+        clean.requestFinish()
+        clean.drained()
+        try expect(clean.end(nativeCloseSucceeded: true) == nil, "cannot emit before teardown counter snapshot")
+        clean.snapshot(received: 7, pending: 0, failed: 0)
+        try expectEnd(clean.end(nativeCloseSucceeded: true), received: 7, pending: 0,
+                      failed: 0, clean: true, "requested and drained with successful native close")
+        try expect(clean.end(nativeCloseSucceeded: true) == nil, "duplicate native close cannot emit twice")
+        clean.markUnclean()
+        try expect(clean.end(nativeCloseSucceeded: false) == nil, "removal after completion cannot emit twice")
+
+        var forced = CameraReceiveCompletion()
+        forced.markUnclean()
+        forced.snapshot(received: 3, pending: 4, failed: 2)
+        forced.snapshot(received: 3, pending: 0, failed: 0) // Adapter clears its UI/queue afterward.
+        forced.requestFinish()
+        forced.drained() // Late/stale drain cannot turn a stopped run into a clean one.
+        try expectEnd(forced.end(nativeCloseSucceeded: true), received: 3, pending: 4,
+                      failed: 2, clean: false, "force stop preserves pre-clear counters")
+
+        var noDrain = CameraReceiveCompletion()
+        noDrain.requestFinish()
+        noDrain.snapshot(received: 2, pending: 0, failed: 0)
+        noDrain.drained() // Snapshot freezes drain eligibility as well as counters.
+        try expectEnd(noDrain.end(nativeCloseSucceeded: true), received: 2, pending: 0,
+                      failed: 0, clean: false, "finish intent plus empty queue is not drain evidence")
+
+        var noFinish = CameraReceiveCompletion()
+        noFinish.drained()
+        noFinish.snapshot(received: 1, pending: 0, failed: 0)
+        try expectEnd(noFinish.end(nativeCloseSucceeded: true), received: 1, pending: 0,
+                      failed: 0, clean: false, "unsolicited close or PTP end without finish intent")
+
+        var retryAfterError = CameraReceiveCompletion()
+        retryAfterError.markUnclean() // Device/download/PTP/authorization error.
+        retryAfterError.requestFinish()
+        retryAfterError.drained()
+        retryAfterError.snapshot(received: 5, pending: 0, failed: 0) // UI retry reset failures.
+        try expectEnd(retryAfterError.end(nativeCloseSucceeded: true), received: 5, pending: 0,
+                      failed: 0, clean: false, "error is sticky across retry count reset")
+
+        for interrupted in [false, true] {
+            var terminal = CameraReceiveCompletion()
+            terminal.requestFinish()
+            terminal.drained()
+            if interrupted { terminal.markUnclean() } // Explicit stop/error after drain.
+            terminal.snapshot(received: 6, pending: 0, failed: 0)
+            try expectEnd(terminal.end(nativeCloseSucceeded: true), received: 6,
+                          pending: 0, failed: 0, clean: !interrupted, "post-drain forced/error stop=\(interrupted)")
+        }
+
+        for counts in [(pending: 1, failed: 0), (pending: 0, failed: 1)] {
+            var incomplete = CameraReceiveCompletion()
+            incomplete.requestFinish()
+            incomplete.drained()
+            incomplete.snapshot(received: 8, pending: counts.pending, failed: counts.failed)
+            try expectEnd(incomplete.end(nativeCloseSucceeded: true), received: 8,
+                          pending: counts.pending, failed: counts.failed, clean: false,
+                          "remaining pending/failed work vetoes clean")
+        }
+
+        var unopened = CameraReceiveCompletion()
+        unopened.requestFinish()
+        unopened.snapshot(received: 0, pending: 0, failed: 0)
+        try expectEnd(unopened.end(nativeCloseSucceeded: false), received: 0, pending: 0,
+                      failed: 0, clean: false, "no-device/authorization stop resumes UI without success")
+        try expect(unopened.end(nativeCloseSucceeded: false) == nil, "repeated no-device stop emits once")
+    }
+
+    static func closeFailureCompletionStaysUnclean() throws {
+        for timeout in [false, true] {
+            let ids = IDs()
+            var state = try receiving(ids)
+            var completion = CameraReceiveCompletion()
+            completion.requestFinish()
+            completion.drained()
+            try expect(state.stop(id: ids.session) == .requestClose, "completion test requests native close")
+            completion.snapshot(received: 9, pending: 0, failed: 0)
+            if timeout {
+                try expect(state.closeTimedOut(id: ids.session), "completion test observes close timeout")
+            } else {
+                try expect(state.closed(id: ids.session, deviceID: ids.camera, succeeded: false) == .requireReconnect,
+                           "completion test observes native close failure")
+            }
+            try expectEnd(completion.end(nativeCloseSucceeded: false), received: 9, pending: 0,
+                          failed: 0, clean: false, "drain cannot override close failure/timeout")
+            try expect(!state.canStart, "unclean receipt does not release native uncertainty barrier")
+            try expect(state.closed(id: ids.session, deviceID: ids.camera, succeeded: true) == .requireReconnect,
+                       "late successful native close still requires reconnect")
+            try expect(completion.end(nativeCloseSucceeded: true) == nil, "late success cannot revise or duplicate receipt")
+            try expect(state.removed(id: ids.session, deviceID: ids.camera), "removal releases failed close barrier")
+            try expect(completion.end(nativeCloseSucceeded: false) == nil, "physical removal after error emits no duplicate")
+        }
+    }
+
     static func main() throws {
         try cachedDiscoveryAndDuplicates()
         try staleBrowsersAndAuthorization()
@@ -180,6 +285,8 @@ enum CameraLifecycleChecks {
         try timeoutRequiresPhysicalRemoval()
         try timeoutWhileOpening()
         try errorsAndExternalClose()
+        try receiveCompletionReceipts()
+        try closeFailureCompletionStaysUnclean()
         print("CameraLifecycle: \(checks) checks passed (production reducer; no hardware operations)")
     }
 }

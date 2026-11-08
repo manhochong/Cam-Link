@@ -12,7 +12,7 @@ Google：既有 `work-camera-512615` 專案中的獨立 Cam Link iOS Drive Clien
 
 Microsoft：已在 `gonfoliocontactgmail.onmicrosoft.com` 建立獨立 **Cam Link iOS**。Client ID `16437f88-79e4-499f-8cb3-7f07c9146e0c`、原生回呼 `msauth.hk.camlink.ios://auth`、個人及組織帳戶、五個 Graph 委派 scope 已從下載的已保存 manifest 核對。詳見 `AZURE_REGISTRATION.md` 與 `AzureRegistration.json`。沒有改動 Gonfolio／Android 註冊、建立 client secret、購買服務或授予目錄管理員同意。
 
-## 已完成來源與主畫面接線，待真正編譯
+## 已完成來源與主畫面接線，待整合驗證
 
 - 共用 OAuth：系統登入、PKCE、state／精確 callback、Keychain、刷新／取消與 redirect 保護；Google SDK 和 Microsoft 共用互動登入鎖。
 - Google Drive：正式 SDK 登入、資料夾選建、活動目的地、整檔原圖、耐久分段佇列、暫停／續傳／重試、MD5／SHA 或整份下載核對、獨立紀錄。
@@ -24,11 +24,15 @@ Microsoft：已在 `gonfoliocontactgmail.onmicrosoft.com` 建立獨立 **Cam Lin
 
 真正的雲端設定、雙電腦、歷史與偏好頁已從 RootView 可達，由單一 CamLinkRuntime 注入。自動加入只針對新驗證圖，明確歷史補傳另行選擇，雲端錯誤不影響本機原圖。
 
-## 正在執行的驗證次序
+## 整合修正與已取得的驗證
 
-靜態 Swift 語法、YAML、source plist／Client／callback 一致性已檢查；這不等於 Swift 型別編譯或測試已通過。`ios/run_parity_tests.sh` 已納入 smoke 和 signed workflow，真正 Mac 執行 lifecycle、OAuth、偏好、Google、OneDrive、雙電腦及場次／模型回歸；原有 PTP、JPEG、MPF 回歸保留。
+真正 Mac 已分別通過 lifecycle 179 項、OAuth 126 項、回饋 138 項、Google 78 項注入式檢查，以及雙電腦、活動／真實模型和 ZIP 原圖保留回歸。這些是離線測試，不是帳戶或硬體端到端成功。
 
-下一步：真正 macOS 回歸與完整 Apple SDK 編譯、修正具體錯誤；通過後才進行 signed IPA metadata 驗證及 TestFlight 內部群組確認。尚未宣稱 build 42 已分發。
+整合修正涵蓋：接收完成必須等待 drain 與原生 close；中斷維持未完成；成功回條必須先持久化；每個目的地保留獨立證據；政策暫停不覆寫使用者暫停；歷史重試精確限定照片與場次；request 套用最新網路限制，session 不凍結舊設定。首頁回饋欄位和檔案保護 SDK 名稱已修正。
+
+OneDrive 新增的政策取消測試曾因重用已登出的 OAuthCoordinator 而在進入 transport 前失敗；mock vault 重新寫入不能清除登出 tombstone。測試已改以新 coordinator 表達冷啟動，原本的 transport-start、取消和重試斷言不變，待新一輪 Mac 回歸確認。
+
+46 份 Swift 靜態語法、腳本語法與 source metadata 檢查通過；這不等於完整 SDK 編譯通過。先前臨時 Mac 遠端工作階段已結束，接續由提交後的乾淨 `ios-smoke` 執行全部回歸及 Apple SDK 編譯。`ios/run_parity_tests.sh` 同時納入 smoke 和 signed workflow，原有 PTP、JPEG、MPF 回歸保留；全部成功後才啟動內部 TestFlight。尚未宣稱 build 42 已分發。
 
 ## 必須保留的能力界線
 

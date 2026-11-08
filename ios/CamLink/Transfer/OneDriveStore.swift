@@ -234,7 +234,7 @@ final class OneDriveURLSessionTransport: OneDriveHTTPTransport, @unchecked Senda
             let config = URLSessionConfiguration.ephemeral
             config.httpCookieStorage = nil; config.urlCredentialStorage = nil; config.urlCache = nil
             config.timeoutIntervalForRequest = 45; config.timeoutIntervalForResource = 90
-            CamLinkNetworkPolicy.apply(to: config, allowsCellular: true)
+            CamLinkNetworkPolicy.configureSessionCeiling(config)
             self.session = URLSession(configuration: config)
         }
         self.deadline = deadline.isFinite ? min(180, max(0.05, deadline)) : 90
@@ -667,6 +667,8 @@ final class OneDriveStore: ObservableObject {
     private var generation = UUID()
     private var worker: Task<Void, Never>?
     private var workerID: UUID?
+    // Runtime-only foreground/global-network policy; not part of Snapshot.paused.
+    private var policyBlocked = false
     #if canImport(Network)
     private var networkMonitor: NWPathMonitor?
     #endif
@@ -932,6 +934,20 @@ final class OneDriveStore: ObservableObject {
     func pause() {
         paused = true; worker?.cancel(); persistOrStop(); status = "已暫停；保留金鑰鏈續傳狀態。"
     }
+    /// Transient parent policy; never resumes or persists a user-paused queue.
+    func setPolicyBlocked(_ blocked: Bool) {
+        guard policyBlocked != blocked else { return }
+        policyBlocked = blocked
+        if blocked {
+            worker?.cancel()
+            if !storageBlocked { status = "OneDrive 等待前景／網路政策允許；使用者暫停設定與原圖保留。" }
+        } else if !paused {
+            Task { [weak self] in
+                guard let self = self, !self.paused, !self.policyBlocked else { return }
+                await self.pump()
+            }
+        }
+    }
     func resume() async {
         guard !storageBlocked, account != nil else { status = OneDriveFailure.signIn.localizedDescription; return }
         paused = false; persistOrStop(); await pump()
@@ -948,21 +964,40 @@ final class OneDriveStore: ObservableObject {
         } catch { status = OneDriveFailure.safe(error).localizedDescription }
     }
     func retryFailed(jobID: String? = nil) {
-        guard let account = account, !storageBlocked else { return }
+        _ = retryFailed(matching: { jobID == nil || jobID == $0.id })
+    }
+    /// Explicit selected-photo retry; never matches a reused ID at another local source.
+    @discardableResult
+    func retryFailed(photos: [ReceivedJPEG]) -> Int {
+        var selected: [String: Set<String>] = [:]
+        for photo in photos {
+            guard let relative = try? relativePath(photo.url), let source = try? sourceURL(relative) else { continue }
+            selected[photo.id, default: []].insert(source.path)
+        }
+        return retryFailed(matching: { job in
+            guard let source = try? self.sourceURL(job.localRelativePath) else { return false }
+            return selected[job.photoID]?.contains(source.path) == true
+        })
+    }
+    private func retryFailed(matching selected: (OneDriveJob) -> Bool) -> Int {
+        guard let account = account, !storageBlocked else { return 0 }
+        var count = 0
         do {
             for current in jobs where matches(current, account: account)
-                && (jobID == nil || jobID == current.id)
+                && selected(current)
                 && [.failed, .retry, .needsSignIn, .cancelled].contains(current.state) {
                 var job = current; job.state = .pending; job.attempts = 0; job.nextAttemptAt = .distantPast; job.error = nil
                 try replace(job)
+                count += 1
             }
         } catch { status = OneDriveFailure.safe(error).localizedDescription }
+        return count
     }
     /// Parent foreground/network policy hook. This is not background USB or background delivery.
     func updateNetwork(available: Bool, wifi: Bool) {
         networkAvailable = available; onWiFi = wifi
         if !available || (wifiOnly && !wifi) { worker?.cancel() }
-        else if !paused { Task { await self.pump() } }
+        else if !paused && !policyBlocked { Task { await self.pump() } }
     }
     private func matches(_ job: OneDriveJob, account: OneDriveAccount) -> Bool {
         job.accountID == account.id && job.driveID == account.driveID && job.setup == account.setup
@@ -978,7 +1013,7 @@ final class OneDriveStore: ObservableObject {
             await current.value
             if workerID == currentID { worker = nil; workerID = nil }
         }
-        guard !paused, !settingsBusy, !storageBlocked, networkAvailable,
+        guard !Task.isCancelled, !paused, !policyBlocked, !settingsBusy, !storageBlocked, networkAvailable,
               (!wifiOnly || onWiFi), account != nil else { return }
         guard worker == nil else { return }
         let id = UUID(); workerID = id
@@ -992,7 +1027,7 @@ final class OneDriveStore: ObservableObject {
     }
     private func runWorker() async {
         busy = true; defer { busy = false }
-        while !Task.isCancelled, !paused, !settingsBusy, !storageBlocked, networkAvailable,
+        while !Task.isCancelled, !paused, !policyBlocked, !settingsBusy, !storageBlocked, networkAvailable,
               (!wifiOnly || onWiFi), let account = account {
             let candidates = jobs.filter { matches($0, account: account) && [.pending, .retry].contains($0.state) }
             guard let job = candidates.min(by: { $0.nextAttemptAt < $1.nextAttemptAt }) else { return }
@@ -1010,6 +1045,7 @@ final class OneDriveStore: ObservableObject {
         var job = input
         do {
             try Task.checkCancellation()
+            guard !paused, !policyBlocked else { throw OneDriveFailure.cancelled }
             job.state = .uploading; job.error = nil; try replace(job)
             let url = try sourceURL(job.localRelativePath)
             let original = try await Task.detached(priority: .utility) { try OneDriveOriginal.inspect(url) }.value
@@ -1025,17 +1061,17 @@ final class OneDriveStore: ObservableObject {
                 try await self?.applyCheckpoint(checkpoint, jobID: jobID, generation: id)
             }
             try Task.checkCancellation()
-            guard generation == id, account?.id == expected.id,
+            guard generation == id, !paused, !policyBlocked, account?.id == expected.id,
                   let current = jobs.first(where: { $0.id == job.id }), current.state != .cancelled else { throw OneDriveFailure.cancelled }
             // Re-read original after upload to prevent receipt for a changed local source.
             let after = try await Task.detached(priority: .utility) { try OneDriveOriginal.inspect(url) }.value
             guard after == original else { throw OneDriveFailure.source }
             try Task.checkCancellation()
-            guard generation == id, account?.id == expected.id,
+            guard generation == id, !paused, !policyBlocked, account?.id == expected.id,
                   jobs.first(where: { $0.id == job.id })?.state == .uploading else { throw OneDriveFailure.cancelled }
             try await sessionVault.delete(job.id)
             try Task.checkCancellation()
-            guard generation == id,
+            guard generation == id, !paused, !policyBlocked,
                   jobs.first(where: { $0.id == job.id })?.state == .uploading else { throw OneDriveFailure.cancelled }
             job.offset = job.bytes; job.remoteID = result.remoteID; job.verification = result.method
             job.verifiedAt = Date(); job.state = .verified; job.error = nil; try replace(job)
@@ -1062,7 +1098,7 @@ final class OneDriveStore: ObservableObject {
         }
     }
     private func applyCheckpoint(_ value: OneDriveUploadCheckpoint, jobID: String, generation expected: UUID) throws {
-        guard generation == expected, !Task.isCancelled,
+        guard generation == expected, !Task.isCancelled, !paused, !policyBlocked,
               let current = jobs.first(where: { $0.id == jobID }), current.state == .uploading else { throw OneDriveFailure.cancelled }
         var job = current; job.offset = value.offset; try replace(job)
     }

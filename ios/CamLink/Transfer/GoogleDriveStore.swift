@@ -293,7 +293,7 @@ final class GoogleDriveHTTP: @unchecked Sendable {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.urlCredentialStorage = nil; config.urlCache = nil
         config.timeoutIntervalForRequest = 30; config.timeoutIntervalForResource = 180
-        CamLinkNetworkPolicy.apply(to: config, allowsCellular: CamLinkNetworkPolicy.allowsCellular(for: .googleDrive))
+        CamLinkNetworkPolicy.configureSessionCeiling(config)
         return URLSession(configuration: config)
     }
     static func validate(_ url: URL, uploadOnly: Bool = false) throws {
@@ -767,6 +767,10 @@ final class GoogleDriveStore: ObservableObject {
     private var epoch = UUID()
     private var transfer: Task<GoogleDriveJob, Error>?
     private var pumpTask: Task<Void, Never>?
+    private var worker: Task<Void, Never>?
+    private var workerID: UUID?
+    // Runtime-only foreground/global-network policy; never changes the user's saved pause.
+    private var policyBlocked = false
     private var pathAllowed = false
     #if canImport(Network)
     private var monitor: NWPathMonitor?
@@ -812,8 +816,8 @@ final class GoogleDriveStore: ObservableObject {
                 Task { @MainActor in
                     guard let self = self else { return }
                     self.pathAllowed = satisfied && (!self.wifiOnly || wifi)
-                    if self.pathAllowed && self.autoUpload && !self.paused && self.signedInReady { self.startPending() }
-                    if !self.pathAllowed { self.transfer?.cancel() }
+                    if self.pathAllowed && self.autoUpload && !self.paused && !self.policyBlocked && self.signedInReady { self.startPending() }
+                    if !self.pathAllowed { self.worker?.cancel(); self.transfer?.cancel() }
                 }
             }
             monitor.start(queue: DispatchQueue(label: "hk.camlink.ios.drive.path"))
@@ -937,7 +941,7 @@ final class GoogleDriveStore: ObservableObject {
         if let path = monitor?.currentPath { pathAllowed = path.status == .satisfied && (!enabled || path.usesInterfaceType(.wifi)) }
         #endif
         do { try persist() } catch { message = GoogleDriveFailure.message(error) }
-        if !pathAllowed { pause() }
+        if !pathAllowed { worker?.cancel(); transfer?.cancel() }
         else if autoUpload { startPending() }
     }
     func setAlbumSubfolders(_ enabled: Bool) {
@@ -979,7 +983,7 @@ final class GoogleDriveStore: ObservableObject {
         if autoUpload && !paused && signedInReady { startPending() }
     }
     func startPending() {
-        guard pumpTask == nil, signedInReady, !paused else { return }
+        guard pumpTask == nil, signedInReady, !paused, !policyBlocked else { return }
         pumpTask = Task { [weak self] in
             guard let self = self else { return }
             await self.uploadPending(); self.pumpTask = nil
@@ -992,16 +996,32 @@ final class GoogleDriveStore: ObservableObject {
             if let previous = pumpTask, previous.isCancelled {
                 Task { [weak self] in
                     await previous.value
-                    guard let self = self, !self.paused else { return }
+                    guard let self = self, !self.paused, !self.policyBlocked else { return }
                     self.startPending()
                 }
             } else { startPending() }
         } catch { message = GoogleDriveFailure.message(error) }
     }
     func pause() {
-        paused = true; pumpTask?.cancel(); transfer?.cancel()
+        paused = true; pumpTask?.cancel(); worker?.cancel(); transfer?.cancel()
         do { try persist(); message = "Drive 已要求暫停；遠端已接收部分保留，可安全探測續傳。" }
         catch { message = GoogleDriveFailure.message(error) }
+    }
+    /// Transient parent policy, independent of the user's durable pause/resume choice.
+    func setPolicyBlocked(_ blocked: Bool) {
+        guard policyBlocked != blocked else { return }
+        policyBlocked = blocked
+        if blocked {
+            pumpTask?.cancel(); worker?.cancel(); transfer?.cancel()
+            if storageReady { message = "Drive 等待前景／網路政策允許；使用者暫停設定與原圖保留。" }
+        } else if !paused {
+            let previous = pumpTask
+            Task { [weak self] in
+                await previous?.value
+                guard let self = self, !self.paused, !self.policyBlocked else { return }
+                self.startPending()
+            }
+        }
     }
     /// Convenient async parent hook; automatic dispatch still requires explicit opt-in.
     func pump() async { await uploadPending() }
@@ -1012,17 +1032,58 @@ final class GoogleDriveStore: ObservableObject {
         do { try persist() } catch { message = GoogleDriveFailure.message(error) }
     }
     func retryFailed() {
-        for index in jobs.indices where matches(jobs[index]) && [.failed, .needsSignIn, .retry, .cancelled].contains(jobs[index].state) {
-            jobs[index].state = .pending; jobs[index].attempts = 0; jobs[index].nextAttemptAt = .distantPast; jobs[index].error = nil
+        _ = retryFailed(matching: { _ in true })
+    }
+    /// Explicit selected-photo retry. An ID reused in another album/source is not selected.
+    @discardableResult
+    func retryFailed(photos: [ReceivedJPEG]) -> Int {
+        let root = documents.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        var selected: [String: Set<String>] = [:]
+        for photo in photos where photo.url.isFileURL {
+            let path = photo.url.resolvingSymlinksInPath().standardizedFileURL.path
+            guard path.hasPrefix(root) else { continue }
+            selected[photo.id, default: []].insert(path)
         }
-        do { try persist(); message = "此帳戶失敗／取消項目已重新排入；尚未傳送驗證。" }
-        catch { message = GoogleDriveFailure.message(error) }
+        return retryFailed(matching: { job in
+            let path = self.documents.appendingPathComponent(job.localRelativePath)
+                .resolvingSymlinksInPath().standardizedFileURL.path
+            return path.hasPrefix(root) && selected[job.photoID]?.contains(path) == true
+        })
+    }
+    private func retryFailed(matching selected: (GoogleDriveJob) -> Bool) -> Int {
+        guard storageReady else { message = GoogleDriveFailure.storage.localizedDescription; return 0 }
+        let previous = jobs
+        var count = 0
+        for index in jobs.indices where matches(jobs[index]) && selected(jobs[index])
+            && [.failed, .needsSignIn, .retry, .cancelled].contains(jobs[index].state) {
+            jobs[index].state = .pending; jobs[index].attempts = 0; jobs[index].nextAttemptAt = .distantPast; jobs[index].error = nil
+            count += 1
+        }
+        guard count > 0 else { return 0 }
+        do { try persist(); message = "已明確重排 \(count) 張 Drive 失敗／取消原圖；尚未傳送驗證。"; return count }
+        catch { jobs = previous; message = GoogleDriveFailure.message(error); return 0 }
     }
     private func matches(_ job: GoogleDriveJob) -> Bool {
         job.clientID == account?.clientID && job.sdkUserID == account?.sdkUserID && job.accountID == account?.permissionID
     }
     func uploadPending() async {
-        guard !busy, !authBusy, storageReady, signedInReady, !paused, let account = account else { return }
+        if let current = worker {
+            let currentID = workerID
+            await current.value
+            if workerID == currentID { worker = nil; workerID = nil }
+        }
+        guard !Task.isCancelled, !paused, !policyBlocked, !authBusy, storageReady, signedInReady, worker == nil else { return }
+        let id = UUID(); workerID = id
+        let task = Task<Void, Never> { @MainActor [weak self] in
+            guard let self = self else { return }
+            await self.runUploadPending()
+        }
+        worker = task
+        await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
+        if workerID == id { worker = nil; workerID = nil }
+    }
+    private func runUploadPending() async {
+        guard !Task.isCancelled, !busy, !authBusy, storageReady, signedInReady, !paused, !policyBlocked, let account = account else { return }
         guard pathAllowed else { message = wifiOnly ? "等待可用 Wi-Fi；沒有啟動上傳。" : "等待網路恢復；沒有啟動上傳。"; return }
         busy = true; let generation = epoch; defer { busy = false; transfer = nil }
         let api = api(for: account)
@@ -1030,7 +1091,7 @@ final class GoogleDriveStore: ObservableObject {
             let profile = try await api.profile(clientID: account.clientID, sdkID: account.sdkUserID)
             guard profile.permissionID == account.permissionID else { throw GoogleDriveFailure.accountChanged }
         } catch { message = GoogleDriveFailure.message(error); return }
-        while !Task.isCancelled, storageReady, epoch == generation, pathAllowed, !paused {
+        while !Task.isCancelled, storageReady, epoch == generation, pathAllowed, !paused, !policyBlocked {
             guard let index = jobs.firstIndex(where: { matches($0) && [.pending, .retry].contains($0.state) && $0.nextAttemptAt <= Date() }) else {
                 if let next = activeJobs.filter({ $0.state == .retry }).map(\.nextAttemptAt).min() {
                     let seconds = min(120, max(0.1, next.timeIntervalSinceNow))
@@ -1055,14 +1116,14 @@ final class GoogleDriveStore: ObservableObject {
                     _ = try await api.checkFolder(parent)
                     let folder = try await self.boundFolder(name: resolved.albumName, parent: parent, account: account, api: api)
                     try Task.checkCancellation()
-                    guard self.epoch == generation, !self.paused,
+                    guard self.epoch == generation, !self.paused, !self.policyBlocked,
                           let current = self.jobs.firstIndex(where: { $0.id == resolved.id }), self.jobs[current].state != .cancelled else { throw CancellationError() }
                     resolved.folderID = folder.id; resolved.folderName = folder.name; resolved.albumFolderPending = false
                     self.jobs[current] = resolved; try self.persist()
                 }
                 return try await uploader.transfer(resolved, source: source) { [weak self] updated in
                     guard let self = self, self.epoch == generation,
-                          !self.paused, let index = self.jobs.firstIndex(where: { $0.id == updated.id }), self.jobs[index].state != .cancelled else { throw CancellationError() }
+                          !self.paused, !self.policyBlocked, let index = self.jobs.firstIndex(where: { $0.id == updated.id }), self.jobs[index].state != .cancelled else { throw CancellationError() }
                     self.jobs[index] = updated; try self.persist()
                 }
             }
@@ -1070,7 +1131,7 @@ final class GoogleDriveStore: ObservableObject {
             do {
                 var result = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
                 guard epoch == generation, let current = jobs.firstIndex(where: { $0.id == job.id }), jobs[current].state != .cancelled,
-                      !Task.isCancelled else { throw CancellationError() }
+                      !Task.isCancelled, !paused, !policyBlocked else { throw CancellationError() }
                 result.state = .verified; result.verifiedAt = Date(); result.error = nil; jobs[current] = result
                 try persist(); message = "Drive 已核對原图：" + (result.verification ?? "")
             } catch {

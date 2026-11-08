@@ -15,10 +15,11 @@ network=ios/CamLink/Transfer/CamLinkNetworkPolicy.swift
 oauth=ios/CamLink/Transfer/OAuthSupport.swift
 photo=ios/CamLink/Camera/ReceivedJPEG.swift
 check camera-lifecycle ios/CamLink/Camera/CameraLifecycle.swift ios/CameraLifecycleTests.swift
-check oauth-support "$oauth" ios/OAuthSupportTests.swift
+check oauth-support "$oauth" "$feedback" "$network" ios/OAuthSupportTests.swift
 check delivery-feedback "$feedback" ios/DeliveryFeedbackTests.swift
 check google-drive "$oauth" "$feedback" "$network" "$photo" ios/CamLink/Transfer/GoogleDriveStore.swift ios/GoogleDriveTests.swift
 check onedrive "$oauth" "$feedback" "$network" "$photo" ios/CamLink/Transfer/OneDriveStore.swift ios/OneDriveTests.swift
 check multi-pc "$feedback" "$network" "$photo" ios/CamLink/Transfer/PairStore.swift ios/CamLink/Transfer/PcClient.swift ios/CamLink/Transfer/MultiPCDeliveryStore.swift ios/MultiPCTests.swift
 check session-archive "$photo" ios/CamLink/Session/SessionArchive.swift ios/CamLink/Session/SessionExport.swift ios/SessionArchiveTests.swift
 check session-model -D SESSION_MODEL_TESTS "$feedback" "$network" "$photo" ios/CamLink/Transfer/PairStore.swift ios/CamLink/Transfer/PcClient.swift ios/CamLink/Session/ShootSession.swift ios/CamLink/Session/SessionArchive.swift ios/CamLink/Session/SessionExport.swift ios/SessionArchiveTests.swift
+bash ios/run_zip_tests.sh

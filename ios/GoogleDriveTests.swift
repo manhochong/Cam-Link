@@ -66,6 +66,9 @@ private final class DriveTestAuth: GoogleDriveAuthenticating {
     var calls = 0
     var signouts = 0
     var error: Error?
+    var suspendFresh = false
+    var freshStarted = false
+    var freshCancelled = false
     func authorization() throws -> GoogleDriveAuthorization {
         calls += 1
         if let error = error { throw error }
@@ -76,6 +79,11 @@ private final class DriveTestAuth: GoogleDriveAuthenticating {
     func restore(setup: GoogleDriveClientSetup) async throws -> GoogleDriveAuthorization { try authorization() }
     func fresh(setup: GoogleDriveClientSetup, expectedUserID: String) async throws -> GoogleDriveAuthorization {
         guard user == expectedUserID else { throw GoogleDriveFailure.accountChanged }
+        if suspendFresh {
+            freshStarted = true
+            do { try await Task.sleep(nanoseconds: 30_000_000_000) }
+            catch { freshCancelled = true; throw error }
+        }
         return try authorization()
     }
     func signOut(setup: GoogleDriveClientSetup, expectedUserID: String?) async throws { signouts += 1 }
@@ -445,6 +453,33 @@ private enum GoogleDriveTests {
         let report = String(decoding: try store.diagnosticsJSON(), as: UTF8.self)
         try check(!report.contains("fixture@invalid.test") && !report.contains(root.path) && !report.contains("localRelativePath"), "diagnostics omit email and local source path")
         DriveProtocol.install { server.respond($0) }; server.checkpointRemote = true
+        // A direct async pump is tracked even while its first profile request awaits auth.
+        auth.suspendFresh = true
+        let activePump = Task { await store.pump() }
+        for _ in 0..<1000 {
+            if auth.freshStarted { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        try check(auth.freshStarted, "policy fixture reached actual direct-pump worker")
+        store.setPolicyBlocked(true)
+        await activePump.value
+        try check(auth.freshCancelled && !store.paused && store.jobs[0].state == .pending,
+            "runtime policy cancels actual worker without persisting user pause or receipt")
+        auth.suspendFresh = false
+        await store.pump()
+        try check(DriveProtocol.requests().isEmpty, "blocked manual pump performs no HTTP")
+        let blockedSnapshot = try JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("google-drive-jobs-v1.json"))) as! [String: Any]
+        try check(blockedSnapshot["paused"] as? Bool == false && blockedSnapshot["policyBlocked"] == nil,
+            "runtime block is transient and leaves saved user pause unchanged")
+        store.pause()
+        store.setPolicyBlocked(false)
+        await store.pump()
+        try check(store.paused && DriveProtocol.requests().isEmpty, "policy recovery never resumes a user-paused queue")
+        store.setPolicyBlocked(true)
+        store.resumePending() // Explicit user resume cannot bypass runtime policy.
+        await store.pump()
+        try check(!store.paused && DriveProtocol.requests().isEmpty, "explicit resume remains gated while policy blocked")
+        store.setPolicyBlocked(false)
         await store.pump()
         try check(store.verifiedCount == 1 && store.jobs[0].albumFolderPending == false,
             "production store pump resolves album folder and verifies original through injected real HTTP")
@@ -474,6 +509,46 @@ private enum GoogleDriveTests {
         try check(restored.account == nil && !restored.autoUpload && restored.jobs.count == 2 && restoredAuth.signouts == 1,
             "disconnect clears only local connection, preserves all original jobs")
         try check(FileManager.default.fileExists(atPath: file.path), "signout and cancel keep original")
+        // Reused photo IDs across albums must not widen a selected-photo retry.
+        let retryRoot = root.appendingPathComponent("scoped-retry-fixture", isDirectory: true)
+        try FileManager.default.createDirectory(at: retryRoot.appendingPathComponent("sessions"), withIntermediateDirectories: true)
+        try data.write(to: retryRoot.appendingPathComponent("sessions/original.JPG"))
+        try data.write(to: retryRoot.appendingPathComponent("sessions/other.JPG"))
+        func exhausted(_ photoID: String, _ path: String, _ album: String, account: String = "permission_A") -> GoogleDriveJob {
+            var job = GoogleDriveJob(id: GoogleDriveValidation.jobID(client: original.clientID, sdk: original.sdkUserID,
+                account: account, folder: "folder_A", photo: photoID, sha: original.sha256, album: album),
+                clientID: original.clientID, sdkUserID: original.sdkUserID, accountID: account,
+                folderID: "folder_A", folderName: "Cam Link", photoID: photoID, name: original.name, albumName: album,
+                localRelativePath: path, bytes: original.bytes, sha256: original.sha256, createdAt: Date(),
+                albumParentID: "folder_A", albumFolderPending: true)
+            job.state = .failed; job.attempts = 5; job.nextAttemptAt = .distantFuture; job.error = "fixture failure"
+            return job
+        }
+        let retryJobs = [exhausted("photo_A", "sessions/original.JPG", "Selected"),
+            exhausted("photo_A", "sessions/other.JPG", "Other album"),
+            exhausted("photo_B", "sessions/original.JPG", "Other ID"),
+            exhausted("photo_A", "sessions/original.JPG", "Old account", account: "permission_old")]
+        var retrySnapshot = try JSONSerialization.jsonObject(with: saved) as! [String: Any]
+        retrySnapshot["jobs"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(retryJobs))
+        try JSONSerialization.data(withJSONObject: retrySnapshot).write(to: retryRoot.appendingPathComponent("google-drive-jobs-v1.json"))
+        let retryStore = GoogleDriveStore(documentsURL: retryRoot, settings: settings, auth: DriveTestAuth(),
+            http: GoogleDriveHTTP(session: network), resumeVault: vault, monitorsNetwork: false)
+        let selectedPhoto = ReceivedJPEG(id: "photo_A", name: original.name,
+            url: retryRoot.appendingPathComponent("sessions/original.JPG"), bytes: original.bytes,
+            sha256: original.sha256, createdAt: Date(), uploaded: true)
+        retryStore.setPolicyBlocked(true)
+        try check(retryStore.retryFailed(photos: []) == 0, "empty scoped retry is not retry-all")
+        try check(retryStore.retryFailed(photos: [selectedPhoto]) == 1, "scoped retry matches both photo ID and full source path")
+        try check(retryStore.jobs[0].state == .pending && retryStore.jobs[0].attempts == 0
+            && retryStore.jobs[0].nextAttemptAt == .distantPast, "explicit selection resets exhausted retry budget")
+        try check(retryStore.jobs.dropFirst().allSatisfy { $0.state == .failed && $0.attempts == 5 },
+            "same ID at another path, other ID at same path, and old account remain exhausted")
+        try check(retryStore.jobs.map(\.folderID) == retryJobs.map(\.folderID) && selectedPhoto.uploaded,
+            "scoped retry preserves original destinations and independent PC receipt")
+        let retryRestored = GoogleDriveStore(documentsURL: retryRoot, settings: settings, auth: DriveTestAuth(),
+            http: GoogleDriveHTTP(session: network), resumeVault: vault, monitorsNetwork: false)
+        try check(retryRestored.jobs[0].state == .pending && retryRestored.jobs[1].attempts == 5,
+            "scoped retry selection is durable")
         // Corruption fails closed without replacing the user's durable queue.
         let corrupt = root.appendingPathComponent("corrupt-fixture", isDirectory: true)
         try FileManager.default.createDirectory(at: corrupt, withIntermediateDirectories: true)

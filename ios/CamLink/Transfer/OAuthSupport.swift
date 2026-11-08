@@ -370,10 +370,18 @@ struct OAuthHTTPResponse: Sendable {
 
 /// Per-task delegate takes precedence over an injected URLSession's redirect policy.
 private final class OAuthNoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var refused = false
+    var didRefuseRedirect: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return refused
+    }
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                     completionHandler: @escaping (URLRequest?) -> Void) {
+        lock.lock(); refused = true; lock.unlock()
         completionHandler(nil) // Refuse ALL redirects, including same-host redirects.
+        task.cancel() // Do not wait for a rejected endpoint's body to finish.
     }
 }
 
@@ -387,6 +395,7 @@ final class OAuthHTTPClient: @unchecked Sendable {
             configuration.httpCookieStorage = nil
             configuration.urlCredentialStorage = nil
             configuration.urlCache = nil
+            CamLinkNetworkPolicy.configureSessionCeiling(configuration)
             configuration.timeoutIntervalForRequest = 20
             configuration.timeoutIntervalForResource = 30
             self.session = URLSession(configuration: configuration)
@@ -403,6 +412,7 @@ final class OAuthHTTPClient: @unchecked Sendable {
             .contains(where: { ["access_token", "refresh_token", "client_secret"].contains($0.name.lowercased()) })
         else { throw OAuthFailure.invalidConfiguration }
         var outgoing = request
+        CamLinkNetworkPolicy.apply(to: &outgoing, allowsCellular: CamLinkNetworkPolicy.allowsCellular(for: .oneDrive))
         outgoing.timeoutInterval = timeout
         outgoing.cachePolicy = .reloadIgnoringLocalCacheData
         outgoing.httpShouldHandleCookies = false
@@ -437,8 +447,15 @@ final class OAuthHTTPClient: @unchecked Sendable {
         // URLRequest timeout alone is an inactivity timeout. This bounds the whole request too.
         let reply = try await withThrowingTaskGroup(of: NetworkReply.self) { group in
             group.addTask {
-                let (data, response) = try await self.session.data(for: request, delegate: OAuthNoRedirectDelegate())
-                return NetworkReply(data: data, response: response)
+                let redirectGuard = OAuthNoRedirectDelegate()
+                do {
+                    let (data, response) = try await self.session.data(for: request, delegate: redirectGuard)
+                    if redirectGuard.didRefuseRedirect { throw OAuthFailure.redirectRefused }
+                    return NetworkReply(data: data, response: response)
+                } catch {
+                    if redirectGuard.didRefuseRedirect { throw OAuthFailure.redirectRefused }
+                    throw error
+                }
             }
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(self.timeout * 1_000_000_000))

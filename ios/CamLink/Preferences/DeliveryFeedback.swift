@@ -138,11 +138,13 @@ enum StoragePreflight: Equatable, Sendable {
 /// OneDrive/Drive optional SHA is explicitly distinguished from full SHA-256 verification.
 enum DeliveryVerification: String, Codable, Equatable, Sendable {
     case receiverSHA256, driveSizeMD5Parent, driveSizeMD5ParentSHA256
+    case driveDownloadedSizeSHA256Parent
     case oneDriveSize, oneDriveSizeSHA256, webDAVSizeSHA256
     func supports(_ provider: FeedbackProvider) -> Bool {
         switch self {
         case .receiverSHA256: return provider == .computer || provider == .secondComputer
-        case .driveSizeMD5Parent, .driveSizeMD5ParentSHA256: return provider == .googleDrive
+        case .driveSizeMD5Parent, .driveSizeMD5ParentSHA256, .driveDownloadedSizeSHA256Parent:
+            return provider == .googleDrive
         case .oneDriveSize, .oneDriveSizeSHA256: return provider == .oneDrive
         case .webDAVSizeSHA256: return provider == .webDAV
         }
@@ -152,9 +154,29 @@ enum DeliveryVerification: String, Codable, Equatable, Sendable {
         case .receiverSHA256: return "Receiver 回覆相同 SHA-256"
         case .driveSizeMD5Parent: return "ID、大小、MD5、parent 已核對；遠端未提供 SHA-256"
         case .driveSizeMD5ParentSHA256: return "ID、大小、MD5、parent、SHA-256 已核對"
+        case .driveDownloadedSizeSHA256Parent: return "GET 原圖大小、SHA-256、parent 已核對"
         case .oneDriveSize: return "大小已核對；遠端未提供 SHA-256，不是雜湊核對"
         case .oneDriveSizeSHA256: return "大小及 SHA-256 已核對"
         case .webDAVSizeSHA256: return "GET 原圖大小及 SHA-256 已核對"
+        }
+    }
+
+    /// Exact worker result vocabulary, not a substring search: "未提供 SHA-256" is not SHA evidence.
+    /// Unknown/legacy text must remain delivered-only until its evidence can be represented honestly.
+    static func googleDriveWorkerEvidence(_ method: String?) -> Self? {
+        switch method {
+        case "API 大小、parent、MD5、SHA-256": return .driveSizeMD5ParentSHA256
+        case "API 大小、parent、MD5（API 未提供 SHA-256）": return .driveSizeMD5Parent
+        case "authenticated GET 全檔大小、SHA-256、parent": return .driveDownloadedSizeSHA256Parent
+        default: return nil
+        }
+    }
+
+    static func oneDriveWorkerEvidence(_ method: String?) -> Self? {
+        switch method {
+        case "server SHA-256", "server SHA-256 + server SHA-1", "full GET SHA-256":
+            return .oneDriveSizeSHA256
+        default: return nil // SHA-1 alone cannot be relabelled SHA-256.
         }
     }
 }

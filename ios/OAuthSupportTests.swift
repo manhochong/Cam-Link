@@ -148,7 +148,9 @@ final class OAuthSupportTests {
         do {
             try await operation()
             throw TestFailure(description: "FAIL: expected async rejection: \(name)")
-        } catch let error as OAuthFailure { try check(error == expected, name) }
+        } catch let error as OAuthFailure {
+            try check(error == expected, "\(name); expected=\(expected), actual=\(error)")
+        }
     }
     private static func configuration(redirect: String = "hk.camlink.oauth.tests://auth/callback",
                                        extra: [String: String] = [:]) throws -> OAuthConfiguration {

@@ -1,5 +1,49 @@
 import Foundation
 
+/// Receive outcome, published separately from logical browsing/queue teardown.
+struct CameraReceiveEnd {
+    let received: Int
+    let pending: Int
+    let failed: Int
+    let clean: Bool
+}
+
+/// Per-run receipt only; CameraLifecycle remains the sole native close barrier.
+/// Freeze counters before cancelling/clearing receiving work, then emit once.
+struct CameraReceiveCompletion {
+    private var finishRequested = false
+    private var drainCompleted = false
+    private var interrupted = false
+    private var counters: (received: Int, pending: Int, failed: Int)?
+    private var emitted = false
+
+    mutating func requestFinish() {
+        guard counters == nil, !emitted else { return }
+        finishRequested = true
+    }
+
+    mutating func drained() {
+        guard finishRequested, counters == nil, !emitted else { return }
+        drainCompleted = true
+    }
+
+    /// Sticky even if a later retry clears the UI's lastError/failed count.
+    mutating func markUnclean() { interrupted = true }
+
+    mutating func snapshot(received: Int, pending: Int, failed: Int) {
+        guard counters == nil else { return }
+        counters = (received, pending, failed)
+    }
+
+    mutating func end(nativeCloseSucceeded: Bool) -> CameraReceiveEnd? {
+        guard !emitted, let counters else { return nil }
+        emitted = true // Before invoking any client callback (including reentrant stop).
+        return CameraReceiveEnd(received: counters.received, pending: counters.pending,
+            failed: counters.failed, clean: finishRequested && drainCompleted && !interrupted
+                && counters.pending == 0 && counters.failed == 0 && nativeCloseSucceeded)
+    }
+}
+
 /// Production admission/close-barrier decisions, independent of ImageCaptureCore.
 /// The native adapter supplies immutable browser/session/device-admission IDs.
 /// A timeout is deliberately NOT evidence that an Apple-owned session closed.

@@ -82,7 +82,7 @@ enum PcClient {
             request.httpMethod = "HEAD"
             CamLinkNetworkPolicy.apply(to: &request, allowsCellular: false)
             let configuration = URLSessionConfiguration.ephemeral
-            CamLinkNetworkPolicy.apply(to: configuration, allowsCellular: false)
+            CamLinkNetworkPolicy.configureSessionCeiling(configuration)
             let session = URLSession(configuration: configuration, delegate: box, delegateQueue: nil)
             box.session = session
             session.dataTask(with: request) { _, _, _ in
@@ -166,7 +166,7 @@ enum PcClient {
     private static func pinnedSession(fingerprint: String) -> URLSession {
         let delegate = PinningDelegate(expected: fingerprint.lowercased())
         let configuration = URLSessionConfiguration.ephemeral
-        CamLinkNetworkPolicy.apply(to: configuration, allowsCellular: false)
+        CamLinkNetworkPolicy.configureSessionCeiling(configuration)
         return URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
     }
 }

@@ -34,6 +34,8 @@ final class CameraCaptureService: NSObject, ObservableObject {
     @Published var mode: ReceiveMode = .newPhotos
 
     var onJPEG: ((ReceivedJPEG) -> Void)?
+    /// Exactly once per accepted receive run; browsing=false is NOT completion.
+    var onReceiveEnded: ((CameraReceiveEnd) -> Void)?
     /// Applied only when a new session starts; cannot mutate an active receiver's mode.
     var scanIntervalSeconds: TimeInterval = 2
     private var sessionScanInterval: TimeInterval = 2
@@ -45,6 +47,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
         var camera: ICCameraDevice?
         var cameraID: UUID?
         var delegate: CameraSessionDelegate?
+        var completion = CameraReceiveCompletion()
         init(token: UUID) { self.token = token }
     }
     private var session: SessionContext?
@@ -134,8 +137,8 @@ final class CameraCaptureService: NSObject, ObservableObject {
             self.record("CAMERA_PERMISSION \(AVCaptureDevice.authorizationStatus(for: .video).rawValue)")
             guard allowed else {
                 self.authorization = "相機權限未允許"
-                self.stopBrowsing()
                 self.fail("請在設定 → Cam Link 開啟相機權限，再重新連接。")
+                self.stopBrowsing()
                 return
             }
             browser.requestContentsAuthorization { [weak self, browser] auth in
@@ -144,15 +147,15 @@ final class CameraCaptureService: NSObject, ObservableObject {
                     self.authorization = "相機已允許 · 內容授權 \(auth.rawValue)"
                     self.record("CONTENTS_AUTH \(auth.rawValue)")
                     guard auth == .authorized else {
-                        self.stopBrowsing()
                         self.fail("iPadOS 未允許外接相機內容存取。請到設定確認相機權限；若已允許，請匯出診斷。")
+                        self.stopBrowsing()
                         return
                     }
                     do {
                         try FileManager.default.createDirectory(at: self.folder, withIntermediateDirectories: true)
                     } catch {
-                        self.stopBrowsing()
                         self.fail("無法建立 JPG 儲存資料夾：\(error.localizedDescription)")
+                        self.stopBrowsing()
                         return
                     }
                     guard let current = self.session,
@@ -173,6 +176,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
     /// Stop only after all already-queued originals have completed; keep the cable connected.
     func finishReceiving() {
         guard browsing else { return }
+        session?.completion.requestFinish()
         if ptpSelected, connected {
             finishing = true
             status = "正在完成 PTP 接收，請保持相機連線…"
@@ -181,8 +185,8 @@ final class CameraCaptureService: NSObject, ObservableObject {
             if let ptpReceiver { ptpReceiver.finish() }
             else if !ptpAuthorizing {
                 let reason = lastError.isEmpty ? "PTP 尚未就緒；請匯出診斷。" : lastError
-                stopBrowsing()
                 fail(reason)
+                stopBrowsing()
             }
             return
         }
@@ -190,18 +194,31 @@ final class CameraCaptureService: NSObject, ObservableObject {
         finishing = true
         status = "正在完成接收，請保持相機連線…"
         record("DRAIN pending=\(queuedCount)")
-        if active == nil, queue.isEmpty { stopBrowsing() }
+        if active == nil, queue.isEmpty { stopAfterDrain() }
     }
 
+    /// Explicit/forced stop is never proof of a successful drain.
     func stopBrowsing() {
+        guard let context = session else { return }
+        context.completion.markUnclean()
+        stopReceiving(context)
+    }
+
+    private func stopAfterDrain() {
         guard browsing, let context = session else { return }
+        context.completion.drained()
+        stopReceiving(context)
+    }
+
+    private func stopReceiving(_ context: SessionContext) {
+        guard browsing, session === context else { return }
         let action = lifecycle.stop(id: context.token)
         invalidateReceiving(context)
         publishLifecycle()
         switch action {
         case .released:
-            releaseSession(context)
             status = "已停止接收"
+            releaseSession(context)
         case .waitForOpen:
             status = "正在等待相機開啟完成後關閉，請保持連線…"
             record("CLOSE_WAIT_OPEN session=\(context.token)")
@@ -228,6 +245,8 @@ final class CameraCaptureService: NSObject, ObservableObject {
     /// Invalidate receiving work BEFORE asking Apple to close its native session.
     /// Keep the context's device and immutable delegate alive for cleanup callbacks.
     private func invalidateReceiving(_ context: SessionContext) {
+        // Snapshot before cancel(), browsing=false, or clearing active/queued work.
+        context.completion.snapshot(received: receivedCount, pending: queuedCount, failed: failedCount)
         generation = UUID()
         timer?.invalidate()
         timer = nil
@@ -278,9 +297,13 @@ final class CameraCaptureService: NSObject, ObservableObject {
         lastError = "\(reason) 請實際拔除 USB 相機再重新連接；確認拔除前不會再次開啟工作階段。"
         status = "請拔除相機後重新連接"
         record("RECONNECT_REQUIRED \(reason)")
+        if let context = session {
+            context.completion.markUnclean()
+            reportReceiveEnded(context, nativeCloseSucceeded: false)
+        }
     }
 
-    private func releaseSession(_ context: SessionContext) {
+    private func releaseSession(_ context: SessionContext, nativeCloseSucceeded: Bool = false) {
         guard session === context, lifecycle.canStart else { return }
         closeTimer?.invalidate()
         closeTimer = nil
@@ -289,6 +312,13 @@ final class CameraCaptureService: NSObject, ObservableObject {
         session = nil
         publishLifecycle()
         record("CLOSE_BARRIER_RELEASED session=\(context.token)")
+        reportReceiveEnded(context, nativeCloseSucceeded: nativeCloseSucceeded)
+    }
+
+    private func reportReceiveEnded(_ context: SessionContext, nativeCloseSucceeded: Bool) {
+        guard let result = context.completion.end(nativeCloseSucceeded: nativeCloseSucceeded) else { return }
+        record("RECEIVE_ENDED session=\(context.token) received=\(result.received) pending=\(result.pending) failed=\(result.failed) clean=\(result.clean)")
+        onReceiveEnded?(result)
     }
 
     func refreshContents() {
@@ -316,8 +346,8 @@ final class CameraCaptureService: NSObject, ObservableObject {
         guard !ptpSelected else { return }
         if active != nil, let downloadBegan, Date().timeIntervalSince(downloadBegan) > 120 {
             record("DOWNLOAD_TIMEOUT")
-            stopBrowsing()
             fail("照片下載超過 120 秒未完成。請重新接線，選「接收卡內 JPG」補收，並匯出診斷。")
+            stopBrowsing()
             return
         }
         guard !finishing else { return }
@@ -429,8 +459,8 @@ final class CameraCaptureService: NSObject, ObservableObject {
                 self.record("CONTROL_AUTH \(auth.rawValue)")
                 guard auth == .authorized else {
                     let reason = "iPadOS 未允許 PTP 讀取授權；沒有傳送任何 PTP 命令。請確認權限後重新搜尋，或匯出診斷。"
-                    if self.finishing { self.stopBrowsing() }
                     self.fail(reason)
+                    if self.finishing { self.stopBrowsing() }
                     return
                 }
                 let reader = PTPCameraReader(camera: device) { [weak self] message in
@@ -452,15 +482,20 @@ final class CameraCaptureService: NSObject, ObservableObject {
                         self.finishing = state.finishing
                         self.status = state.status
                         self.lastError = state.lastError
+                        if state.failedCount > 0 || !state.lastError.isEmpty {
+                            self.session?.completion.markUnclean()
+                        }
                     }, onJPEG: { [weak self] photo in
                         guard let self, token == self.generation, self.ptpSelected else { return }
                         self.onJPEG?(photo)
                     }, onFinished: { [weak self] reason in
                         guard let self, token == self.generation, self.ptpSelected else { return }
-                        self.stopBrowsing()
-                        if let reason { self.fail(reason) }
-                        else if !self.sessionClosing {
-                            self.status = self.receivedCount == 0 ? "已停止接收 · 本次沒有接收 JPG" : "已完成接收"
+                        if let reason {
+                            self.fail(reason)
+                            self.stopBrowsing()
+                        } else {
+                            // The receiver's final-inventory/drain callback, not a State update.
+                            self.stopAfterDrain()
                         }
                     })
                 self.ptpReceiver = receiver
@@ -518,7 +553,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
         guard !ptpSelected, connected, active == nil else { return }
         guard !queue.isEmpty else {
             queuedCount = 0
-            if finishing { stopBrowsing() }
+            if finishing { stopAfterDrain() }
             else if failed.isEmpty, lastError.isEmpty {
                 if catalogCount == 0 { status = "相機已連線 · 尚未找到相片物件" }
                 else if mode == .card, receivedCount == 0 { status = "目錄尚無可接收的 JPG · 請確認照片格式" }
@@ -586,6 +621,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
     }
 
     private func fail(_ reason: String) {
+        session?.completion.markUnclean()
         lastError = reason
         status = "接收需要檢查"
         record("ERROR \(reason)")
@@ -732,8 +768,8 @@ extension CameraCaptureService {
             switch action {
             case .released:
                 if browsing { invalidateReceiving(context) }
-                releaseSession(context)
                 status = "相機工作階段已關閉"
+                releaseSession(context, nativeCloseSucceeded: true)
             case .requireReconnect:
                 if browsing { invalidateReceiving(context) }
                 requireReconnect("相機關閉失敗或已逾時：\(error?.localizedDescription ?? "仍須確認實際拔除")。")
@@ -745,10 +781,16 @@ extension CameraCaptureService {
             guard lifecycle.removed(id: token, deviceID: cameraID) else { return }
             record("DEVICE_REMOVED session=\(token) pending=\(queuedCount)")
             if browsing { invalidateReceiving(context) }
-            releaseSession(context)
+            context.completion.markUnclean()
             status = "相機已拔除"
             lastError = "未完成的下載不會當作成功。重新接線後選「接收卡內 JPG」補收。"
+            releaseSession(context)
             return
+        case .encounteredError(_, let error):
+            // A current native error during close cleanup must also veto clean.
+            if error != nil { context.completion.markUnclean() }
+        case .restrictionEnabled:
+            context.completion.markUnclean()
         default:
             break
         }

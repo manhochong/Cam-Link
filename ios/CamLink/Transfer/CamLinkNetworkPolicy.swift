@@ -13,6 +13,15 @@ enum CamLinkNetworkPolicy {
     static func allowsCellular(for provider: FeedbackProvider) -> Bool {
         !(flags ?? DeliveryPreferences()).wifiOnly(for: provider)
     }
+    /// Session ceilings must not permanently freeze the user's old policy.
+    /// Every production request below receives the latest restrictive snapshot.
+    static func configureSessionCeiling(_ configuration: URLSessionConfiguration) {
+        configuration.allowsCellularAccess = true
+        #if canImport(Darwin)
+        configuration.allowsExpensiveNetworkAccess = true
+        configuration.allowsConstrainedNetworkAccess = true
+        #endif
+    }
     static func apply(to configuration: URLSessionConfiguration, allowsCellular: Bool) {
         configuration.allowsCellularAccess = allowsCellular
         #if canImport(Darwin)

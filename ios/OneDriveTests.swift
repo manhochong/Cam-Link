@@ -40,6 +40,21 @@ private actor ScriptHTTP: OneDriveHTTPTransport {
     func records() -> [Seen] { seen }
     func downloadCount() -> Int { downloaded }
 }
+private actor PolicyBlockingHTTP: OneDriveHTTPTransport {
+    private var started = false
+    private var cancelled = false
+    private var calls = 0
+    func send(_ request: URLRequest, bearer: String?) async throws -> OneDriveHTTPReply {
+        started = true; calls += 1
+        do { try await Task.sleep(nanoseconds: 30_000_000_000) }
+        catch { cancelled = true; throw error }
+        throw OneDriveFailure.network
+    }
+    func download(_ url: URL, expectedBytes: Int64, allowsCellular: Bool) async throws -> OneDriveOriginal {
+        throw TestFailure.assertion("policy cancellation must not download")
+    }
+    func state() -> (started: Bool, cancelled: Bool, calls: Int) { (started, cancelled, calls) }
+}
 private actor Checkpoints {
     private var values: [OneDriveUploadCheckpoint] = []
     func add(_ value: OneDriveUploadCheckpoint) { values.append(value) }
@@ -347,7 +362,23 @@ private func expectFailure(_ label: String, _ action: () async throws -> Void) a
         try expect(count == 1 && repeated == 0 && store.jobs.count == 1, "durable duplicate prevention independent PC uploaded")
         var callbacks = 0
         store.onVerified = { receipt in callbacks += 1; precondition(receipt.sha256 == original.sha256) }
+        store.setPolicyBlocked(true)
         await store.resume()
+        let blockedCalls = await http.records().count
+        try expect(!store.paused && blockedCalls == 0 && callbacks == 0 && store.jobs[0].state == .pending,
+            "explicit user resume cannot bypass transient runtime policy")
+        let blockedSnapshot = try JSONSerialization.jsonObject(with: Data(contentsOf: stateFile)) as! [String: Any]
+        try expect(blockedSnapshot["paused"] as? Bool == false && blockedSnapshot["policyBlocked"] == nil,
+            "runtime policy does not persist itself or change user's saved pause")
+        store.pause()
+        store.setPolicyBlocked(false)
+        await store.pump()
+        let userPausedCalls = await http.records().count
+        try expect(store.paused && userPausedCalls == 0, "policy recovery never resumes a user-paused queue")
+        store.setPolicyBlocked(true)
+        await store.resume()
+        store.setPolicyBlocked(false)
+        await store.pump()
         try expect(store.verifiedCount == 1 && callbacks == 1 && store.receipts.count == 1, "only verified durable receipt triggers callback")
         let networkCount = await http.records().count
         _ = try await store.enqueue([photo], albumName: "Renamed album")
@@ -364,6 +395,75 @@ private func expectFailure(_ label: String, _ action: () async throws -> Void) a
         try expect(restored.account == nil && restored.jobs.count == 1 && FileManager.default.fileExists(atPath: file.path), "disconnect preserves original and history")
         try expect(OneDriveStore.retryDelay(attempt: 1) == 4 && OneDriveStore.retryDelay(attempt: 5, serverSeconds: 30) == 64,
                    "bounded retry with server floor")
+
+        let retryState = directory.appendingPathComponent("ScopedRetryState", isDirectory: true)
+        try FileManager.default.createDirectory(at: retryState, withIntermediateDirectories: true)
+        let otherFile = documents.appendingPathComponent("other/queue.jpg")
+        try FileManager.default.createDirectory(at: otherFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(contentsOf: file).write(to: otherFile)
+        func exhausted(_ photoID: String, _ path: String, _ folderID: String, accountID: String = "account") -> OneDriveJob {
+            var job = OneDriveJob(id: OneDriveGraphAPI.identity([setup.clientID, setup.tenant, setup.redirectURI,
+                accountID, "drive", folderID, photoID, original.sha256]), setup: setup, accountID: accountID,
+                driveID: "drive", folderID: folderID, folderName: folderID, photoID: photoID,
+                originalName: "queue.jpg", remoteName: OneDriveGraphAPI.remoteName(original: "queue.jpg", photoID: photoID, sha256: original.sha256),
+                albumName: folderID, localRelativePath: path, bytes: original.bytes, sha256: original.sha256, createdAt: Date())
+            job.state = .failed; job.attempts = 5; job.nextAttemptAt = .distantFuture; job.error = "fixture failure"
+            return job
+        }
+        let retryJobs = [exhausted("photo", "queue.jpg", "folder"),
+            exhausted("photo", "other/queue.jpg", "otherFolder"),
+            exhausted("otherPhoto", "queue.jpg", "folder"),
+            exhausted("photo", "queue.jpg", "folder", accountID: "old-account")]
+        var retrySnapshot = try JSONSerialization.jsonObject(with: snapshotData) as! [String: Any]
+        retrySnapshot["jobs"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(retryJobs))
+        retrySnapshot["paused"] = false
+        let retryStateFile = retryState.appendingPathComponent("onedrive-v1.json")
+        try JSONSerialization.data(withJSONObject: retrySnapshot).write(to: retryStateFile)
+        // Model a new process: disconnect removed the credential and tombstoned the old coordinator.
+        // Re-seeding the mock vault alone must not bypass that coordinator's local sign-out.
+        try await vault.save(OAuthToken(accessToken: "token", refreshToken: "refresh", expiresAt: Date().addingTimeInterval(3600)), for: account.credentialKey)
+        let retryCoordinator = OAuthCoordinator(browser: NoBrowser(), vault: vault)
+        let blocking = PolicyBlockingHTTP()
+        let retryStore = OneDriveStore(coordinator: retryCoordinator, setup: setup, rootDirectory: documents,
+            stateDirectory: retryState, transport: blocking, sessionVault: sessions, monitorNetwork: false)
+        var retryCallbacks = 0
+        retryStore.onVerified = { _ in retryCallbacks += 1 }
+        try expect(retryStore.retryFailed(photos: []) == 0, "empty selection never retries all jobs")
+        await retryStore.pump()
+        try expect(retryStore.jobs.allSatisfy { $0.state == .failed && $0.attempts == 5 },
+            "ordinary pump never resets exhausted retry budget")
+        try expect(retryStore.retryFailed(photos: [photo]) == 1, "scoped retry requires photo ID and full source path")
+        try expect(retryStore.jobs[0].state == .pending && retryStore.jobs[0].attempts == 0
+            && retryStore.jobs[0].nextAttemptAt == .distantPast, "explicit selected retry resets exhausted budget")
+        try expect(retryStore.jobs.dropFirst().allSatisfy { $0.state == .failed && $0.attempts == 5 },
+            "unrelated album path, different ID at same path and old account are untouched")
+        try expect(retryStore.jobs.map { $0.folderID } == retryJobs.map { $0.folderID } && photo.uploaded,
+            "scoped retry preserves bound destinations and independent PC receipt")
+        let activePump = Task { await retryStore.pump() }
+        for _ in 0..<1000 {
+            if await blocking.state().started { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let started = await blocking.state()
+        try expect(started.started, "policy fixture reached actual network worker")
+        retryStore.setPolicyBlocked(true)
+        await activePump.value
+        let stopped = await blocking.state()
+        try expect(stopped.cancelled && !retryStore.paused && retryStore.jobs[0].state == .pending
+            && retryStore.jobs[0].attempts == 0 && retryCallbacks == 0 && retryStore.receipts.isEmpty,
+            "policy block cancels actual worker without a receipt, retry-budget use or persistent pause")
+        await retryStore.pump()
+        let blocked = await blocking.state()
+        try expect(blocked.calls == stopped.calls, "blocked direct pump cannot dispatch another request")
+        let cold = OneDriveStore(coordinator: OAuthCoordinator(browser: NoBrowser(), vault: vault), setup: setup, rootDirectory: documents,
+            stateDirectory: retryState, transport: http, sessionVault: sessions, monitorNetwork: false)
+        try expect(!cold.paused && cold.jobs[0].state == .pending && cold.jobs[1].attempts == 5,
+            "cold launch preserves user pause and exact scoped retry but not runtime block")
+        retryStore.pause()
+        retryStore.setPolicyBlocked(false)
+        await retryStore.pump()
+        let stillPaused = await blocking.state()
+        try expect(retryStore.paused && stillPaused.calls == stopped.calls, "unblocking does not clear explicit user pause")
     }
     static func testRealTransportGuards() async throws {
         let transport = OneDriveURLSessionTransport(deadline: 0.05)

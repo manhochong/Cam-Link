@@ -92,6 +92,25 @@ struct DeliveryFeedbackTests {
         try expect(DeliveryVerification.webDAVSizeSHA256.supports(.webDAV), "WebDAV readback evidence scoped")
         try expect(!DeliveryVerification.webDAVSizeSHA256.supports(.sharing), "Share extension has no verify receipt")
         try expect(!DeliveryVerification.receiverSHA256.supports(.receiver), "Local receive is not PC remote verification")
+
+        let readback = DeliveryVerification.googleDriveWorkerEvidence("authenticated GET 全檔大小、SHA-256、parent")
+        try expect(readback == .driveDownloadedSizeSHA256Parent, "Drive full GET has its own evidence, not MD5 evidence")
+        try expect(readback?.supports(.googleDrive) == true, "Drive GET evidence is provider scoped")
+        try expect(readback?.supports(.oneDrive) == false && readback?.supports(.webDAV) == false, "Readback does not imply another provider succeeded")
+        try expect(readback?.title.contains("GET") == true && readback?.title.contains("SHA-256") == true && readback?.title.contains("parent") == true, "GET title states exactly the measured evidence")
+        try expect(readback?.title.contains("MD5") == false, "GET fallback does not claim missing MD5")
+        try expect(DeliveryVerification.googleDriveWorkerEvidence("API 大小、parent、MD5、SHA-256") == .driveSizeMD5ParentSHA256, "Drive server SHA and MD5 remain distinct")
+        try expect(DeliveryVerification.googleDriveWorkerEvidence("API 大小、parent、MD5（API 未提供 SHA-256）") == .driveSizeMD5Parent, "Missing-SHA wording is not SHA evidence")
+        try expect(DeliveryVerification.googleDriveWorkerEvidence(nil) == nil, "No evidence is not verification")
+        try expect(DeliveryVerification.googleDriveWorkerEvidence("GET SHA-256") == nil, "An incomplete or unknown evidence string fails closed")
+        try expect(DeliveryVerification.googleDriveWorkerEvidence("API 未提供 SHA-256") == nil, "A SHA substring cannot fabricate a receipt")
+        try expect(DeliveryVerification.oneDriveWorkerEvidence("server SHA-1") == nil, "OneDrive SHA-1 is not relabelled SHA-256")
+        try expect(DeliveryVerification.oneDriveWorkerEvidence("server SHA-256 + server SHA-1") == .oneDriveSizeSHA256, "Mixed OneDrive hash evidence includes actual SHA-256")
+        try expect(DeliveryVerification.oneDriveWorkerEvidence("full GET SHA-256") == .oneDriveSizeSHA256, "OneDrive full readback is actual SHA-256 evidence")
+        try expect(DeliveryVerification.oneDriveWorkerEvidence(nil) == nil, "OneDrive missing worker evidence fails closed")
+        let encoded = try JSONEncoder().encode(DeliveryVerification.driveDownloadedSizeSHA256Parent)
+        let decoded = try JSONDecoder().decode(DeliveryVerification.self, from: encoded)
+        try expect(decoded == .driveDownloadedSizeSHA256Parent, "New GET evidence has a distinct persisted enum value")
     }
 
     @MainActor
@@ -135,6 +154,10 @@ struct DeliveryFeedbackTests {
         feedback.firstReceived(sessionID: capture)
         try expect(feedback.events.filter { $0.kind == .firstReceived }.count == 1, "First locally received cue deduped per run")
         try expect(feedback.banner?.detail.contains("不代表任何目的地") == true, "Local first image does not claim remote delivery")
+        let nextRun = UUID()
+        feedback.firstReceived(sessionID: nextRun)
+        feedback.firstReceived(sessionID: nextRun)
+        try expect(feedback.events.filter { $0.kind == .firstReceived }.count == 2, "A later receive run in the same album gets one new first-photo cue")
         feedback.uploadAccepted(by: .googleDrive, sessionID: capture)
         try expect(feedback.events.last?.kind == .uploadAccepted, "Accepted event recorded")
         try expect(feedback.banner?.kind == .firstReceived, "Accepted-only does not issue a success cue")
@@ -186,15 +209,18 @@ struct DeliveryFeedbackTests {
         let feedback = DeliveryFeedback(defaults: defaults, eventLogURL: log, monitorNetwork: false)
         defer { feedback.stopMonitoring() }
         feedback.recordFailure(provider: .webDAV, reason: .verificationMismatch, httpStatus: 200)
+        try expect(feedback.destinationVerified(.googleDrive, evidence: .driveDownloadedSizeSHA256Parent), "New Google readback event is accepted")
         let restored = DeliveryFeedback(defaults: defaults, eventLogURL: log, monitorNetwork: false)
         defer { restored.stopMonitoring() }
         try expect(restored.events == feedback.events, "Actual atomic event file restores")
+        try expect(restored.events.last?.verification == .driveDownloadedSizeSHA256Parent, "GET evidence survives event-log restore without becoming MD5")
+        try expect(restored.banner == nil, "Loading old receipt events does not emit an old success banner")
         let data = try Data(contentsOf: log)
         let wire = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         let allowedKeys: Set<String> = ["id", "sessionID", "provider", "kind", "verification", "reason", "httpStatus", "goodCount", "failedCount", "pendingCount", "firstAt", "lastAt", "occurrences"]
         try expect(wire?.allSatisfy { Set($0.keys).isSubset(of: allowedKeys) } == true, "Event schema has no channel for freeform secrets")
         var corrupt = wire ?? []
-        corrupt[0]["occurrences"] = -1
+        for index in corrupt.indices { corrupt[index]["occurrences"] = -1 }
         try JSONSerialization.data(withJSONObject: corrupt).write(to: log, options: .atomic)
         let rejected = DeliveryFeedback(defaults: defaults, eventLogURL: log, monitorNetwork: false)
         defer { rejected.stopMonitoring() }
