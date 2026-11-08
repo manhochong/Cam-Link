@@ -42,15 +42,15 @@ build 39 候選版只移除 DeviceInfo 標準欄位後的 exact-end 限制：所
 
 ## build 39 實機下載與 JPG 驗證拒絕
 
-2026-11-08 使用者提供的 `pasted_content_3.txt` 是 build 39 卡內 JPG 接收報告：最終目錄 154 個物件，74 個失敗，成功接收 0 張。09:48:01–09:48:18 UTC 的可見日誌含 56 次完整 GetObject 回傳，均為 `2001`，payload 大小與 ObjectInfo 宣告大小相等。原生資料和正規化 payload 的大小也相等，這些可見照片沒有被誤剝除 12-byte 頭。這次已越過 DeviceInfo 與列檔階段，停止位置是本機 JPG 驗證，不是首頁／紀錄的清單同步問題。
+2026-11-08 使用者提供的 `pasted_content_3.txt` 是 build 39 卡內 JPG 接收報告：最終目錄 154 個物件，74 個失敗，成功接收 0 張。可見日誌含 56 次完整 GetObject 回傳，均為 `2001`，payload 大小與 ObjectInfo 宣告大小相等。原生資料和正規化 payload 的大小也相等，這些可見照片沒有被誤剝除 12-byte 頭。這次已越過 DeviceInfo 與列檔階段，停止位置是本機 JPG 驗證，不是首頁／紀錄的清單同步問題。
 
-`validateJPEG` 原本要求首兩 bytes 是 `FF D8`，而且整份檔案最後兩 bytes 是 `FF D9`；任一條件失敗均只回報「缺少 SOI／EOI」。這份報告未包含影像边界，因此不能知道是哪一端失敗。56 個可見大小都是 512-byte 整數倍，值得查驗尾端填充，但這不是填充證據。JPEG 檔案在主影像 EOI 後可能仍有尾端資料，且 APP／EXIF 內嵌縮圖也可能出現 `FF D9`；不能拿任意最後一個 marker 截斷或直接繞過驗證。[6] [7]
+`validateJPEG` 原本要求首兩 bytes 是 `FF D8`，而且整份檔案最後兩 bytes 是 `FF D9`；任一條件失敗均只回報「缺少 SOI／EOI」。這份報告未包含影像邊界，因此不能知道是哪一端失敗。56 個可見大小都是 512-byte 整數倍，值得查驗尾端填充，但這不是填充證據。JPEG 檔案在主影像 EOI 後可能仍有尾端資料，且 APP／EXIF 內嵌縮圖也可能出現 `FF D9`；不能拿任意最後一個 marker 截斷或直接繞過驗證。[6] [7]
 
 PTP 接收先寫自己的暫存檔，再驗證，只有成功才 rename 並發送 `onJPEG`。首頁預覽與紀錄頁都使用 `ShootSession.photos`，所以此次沒有任何驗證成功就不會出現照片。失敗暫存檔會被刪除，不會成為假已收紀錄；相機原檔沒有被刪除。400 條 rolling log 已被大量重試覆蓋，此報告不是全部 74 張的完整下載歷史，也沒有完整初始化資訊。
 
 build 40 候選修正用主 JPEG marker 結構定位 EOI，跳過 metadata 區段並處理 entropy stuffing／restart／多次 scan，再交由 Apple ImageIO 解碼。保留原始總大小核對，僅容納有界且純 `00`／`FF` 的尾端填充；不接受未知非填充資料，不裁切、不重新壓縮，SHA-256 仍覆蓋保存的整份原檔。這是處理已知驗證缺口的候選修正，尚未證明此次相機內容屬於可接受的填充。新增區分 SOI 起點、EOI 結構位置與尾端分類的摘要，不輸出照片、EXIF 或尾端原文。
 
-候選版紀錄頁會顯示真實接收失敗與匯出診斷入口，不只顯示「尚未收到」；確定的格式拒絕不再重抓同一張大型照片六次。每次開始接收會清空上一場 rolling log，保留本場初始化和首幾個 JPG 結果摘要，避免全卡重試掩蓋關鍵證據。Mac ImageIO 回歸和完整 iOS 簽名／分發仍待驗證。使用者若能提供安全、未編輯的相機原始 JPG，可獨立確認影像的實際起訖與尾端，不必把原圖公開上傳或提交 GitHub。
+候選版紀錄頁會顯示真實接收失敗與匯出診斷入口，不只顯示「尚未收到」；確定的格式拒絕不再重抓同一張大型照片六次。每次開始接收會清空上一場 rolling log，保留本場初始化和首幾個 JPG 結果摘要，避免全卡重試掩蓋關鍵證據。Codemagic build 40 `6af0478124e1ec23755774f1` 已在 macOS runner 真正執行 `PASS: 59 checks (generated fixtures; no camera-capture cause inferred)`，包含 ImageIO 生成的 baseline／progressive JPEG、完整解碼、允許填充與截斷／錯誤／未知尾端拒絕。完整 signed IPA 與最終相機／本機網路用途及 QR metadata 檢查通過，Publishing 明示 version `0.2.25`、code `40`；Apple uploader 10:00:27 UTC 回覆 `UPLOAD SUCCEEDED with no errors`，10:02 UTC 已核實 TestFlight `Testing`、既有 `CamLink Internal` 群組及原來 1 位測試者。可更新至 `0.2.25 (40)`，但實機收檔仍待驗證。使用者若能提供安全、未編輯的相機原始 JPG，可獨立確認影像的實際起訖與尾端，不必把原圖公開上傳或提交 GitHub。
 
 ## 其他相機的支援範圍
 
