@@ -9,6 +9,15 @@ workflows:
         BUNDLE_ID: hk.camlink.ios
         XCODE_SCHEME: CamLink
     scripts:
+      - name: Test read-only PTP codecs (no camera required)
+        script: |
+          set -euo pipefail
+          mkdir -p build/ptp-tests
+          xcrun --sdk macosx swiftc -swift-version 5 -strict-concurrency=minimal \
+            -target "$(uname -m)-apple-macosx13.0" \
+            ios/CamLink/Camera/PTPCameraReader.swift ios/PTPCodecTests.swift \
+            -o build/ptp-tests/codec-tests
+          build/ptp-tests/codec-tests | tee build/ptp-tests/results.txt
       - name: Install XcodeGen
         script: |
           brew install xcodegen
@@ -46,6 +55,7 @@ workflows:
           echo "unsigned iphoneos build ok"
     artifacts:
       - build/ios-smoke/Build/Products/Debug-iphoneos/*.app
+      - build/ptp-tests/results.txt
     triggering:
       events:
         - push
@@ -69,6 +79,15 @@ workflows:
         BUNDLE_ID: hk.camlink.ios
         XCODE_SCHEME: CamLink
     scripts:
+      - name: Test read-only PTP codecs (no camera required)
+        script: |
+          set -euo pipefail
+          mkdir -p build/ptp-tests
+          xcrun --sdk macosx swiftc -swift-version 5 -strict-concurrency=minimal \
+            -target "$(uname -m)-apple-macosx13.0" \
+            ios/CamLink/Camera/PTPCameraReader.swift ios/PTPCodecTests.swift \
+            -o build/ptp-tests/codec-tests
+          build/ptp-tests/codec-tests | tee build/ptp-tests/results.txt
       - name: Install XcodeGen
         script: |
           brew install xcodegen
@@ -93,6 +112,7 @@ workflows:
           python3 ios/verify_metadata.py "$ipa"
     artifacts:
       - build/ios/ipa/*.ipa
+      - build/ptp-tests/results.txt
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
     publishing:
