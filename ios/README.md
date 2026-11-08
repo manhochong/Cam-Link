@@ -7,6 +7,14 @@
 - 暫不包含相機 Wi‑Fi、FlashAir、Google Drive、OneDrive 或 WebDAV。這些 Android 功能不會自動出現在 iOS 版。
 - ImageCaptureCore 是 iOS 可用的 [Apple 官方相機匯入介面](https://developer.apple.com/documentation/imagecapturecore)；它不是 Android 的原始 USB bulk API。不同相機、韌體和 USB 轉接器仍需逐台實測。
 
+### build 34：iPad 問題修正候選版
+
+build 33 已由使用者回報無法從相機收到照片，而且介面不對應 Android；因此 build 34 仍是待驗證候選版，不代表已達成相機功能驗收。修正包含相機授權流程、完整目錄門檻、逐張下載、掉線回呼隔離與 JPG 完整性檢查；主畫面改為 Android 對應的首頁／紀錄／傳送／更多，提供照片預覽、統計與 iPad 橫向左右分區。
+
+首頁的「開始接收新拍 JPG」會在完整目錄就緒後略過既有照片，等待新拍的 JPG。「接收卡內 JPG」才會匯入記憶卡原有 JPG；重新連接要補收未完成照片時請選這個模式。同名且相同 SHA-256 的本機照片不會重複加入。按「停拍並完成接收」會先完成已排入佇列的檔案；請保持相機接線，直到顯示已停止。
+
+若相機無法找到或收檔失敗，在「更多」按「產生 USB 相機診斷報告」後分享報告，並附上相機型號、USB 模式、iPad 型號及 iPadOS 版本。App 不會重設系統權限，也不會刪除或修改相機內的照片。USB 接收期間請保持 App 前景；黑色口袋畫面不是背景服務，也不保證鎖屏仍能接收。
+
 ## 沒有 Mac：使用 Codemagic
 
 倉庫根目錄已有 `codemagic.yaml` 的 `ios-smoke` workflow。它在 Codemagic 雲端 macOS 安裝 XcodeGen、產生 Xcode 專案，並對 iPhoneOS SDK 做未簽名 Debug build。

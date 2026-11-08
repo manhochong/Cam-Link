@@ -43,7 +43,12 @@ final class ShootSession: ObservableObject {
     var pendingCount: Int { photos.filter { !$0.uploaded }.count }
 
     func ingest(_ photo: ReceivedJPEG) {
-        if photos.contains(where: { $0.id == photo.id }) { return }
+        if photos.contains(where: { $0.id == photo.id || ($0.name == photo.name && $0.sha256 == photo.sha256) }) {
+            if !photos.contains(where: { $0.url == photo.url }) {
+                try? FileManager.default.removeItem(at: photo.url)
+            }
+            return
+        }
         photos.insert(photo, at: 0)
     }
 
