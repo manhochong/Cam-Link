@@ -2,7 +2,7 @@ name: CamLink
 options:
   bundleIdPrefix: hk.camlink
   deploymentTarget:
-    iOS: "15.2"
+    iOS: "16.0"
   createIntermediateGroups: true
 settings:
   MARKETING_VERSION: "0.2.25"

@@ -31,7 +31,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
         browser.delegate = self
         browser.browsedDeviceTypeMask = ICDeviceTypeMask(
             rawValue: ICDeviceTypeMask.camera.rawValue | ICDeviceLocationTypeMask.local.rawValue
-        )
+        ) ?? .camera
     }
 
     func startBrowsing() {
