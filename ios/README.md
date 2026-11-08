@@ -15,7 +15,11 @@
 2. 在 Codemagic 新增／選取這個 App，選 `ios-smoke` workflow，並使用 `main` 分支；目前 YAML 只會在 `main` push 時自動觸發，也可在 Codemagic 手動啟動。
 3. 建置成功後，到 Artifacts 下載 `CamLink.app`，查看 Codemagic build log 確認沒有 Swift 或 Xcode 錯誤。
 
-這個 smoke workflow **只驗證能否編譯，不會產生可安裝的簽名 IPA，也不能代替相機實機測試**。若要裝到 iPhone、發 TestFlight 或上 App Store，需在 Codemagic 設定 Apple Developer / App Store Connect 簽名資料，再建立 archive/IPA workflow。不要把憑證、私鑰或 API key 放進 Git。
+這個 smoke workflow **只驗證能否編譯，不會產生可安裝的簽名 IPA，也不能代替相機實機測試**。若要 Ad Hoc 安裝到 iPhone，請使用下方的 `ios-ad-hoc` workflow；TestFlight 或 App Store 則需另外設定相應的簽名與發佈流程。不要把憑證、私鑰或 API key 放進 Git。
+
+### Ad Hoc 安裝到已登記 iPhone
+
+根目錄另有手動啟動的 `ios-ad-hoc` workflow，會使用 `hk.camlink.ios` 的 Ad Hoc profile 簽名並輸出 `build/ios/ipa/*.ipa`。它不會在每次 `main` push 時自動執行；在 Codemagic 手動選 `ios-ad-hoc` 啟動即可。建置前，Apple Developer Program 帳戶中必須已登記目標 iPhone UDID，並為 bundle ID `hk.camlink.ios` 建立包含該裝置的 Ad Hoc provisioning profile；Codemagic 的 Code signing identities 需有對應 Apple Distribution certificate 和該 profile。不要把憑證、私鑰或 profile 加入 Git。
 
 ## 相機與接收器實機驗收
 
