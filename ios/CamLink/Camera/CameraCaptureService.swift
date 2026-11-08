@@ -252,6 +252,11 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
         }
     }
 
+    // Required by the current ImageCaptureCore SDK (Xcode latest).
+    nonisolated func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) {}
+
+    nonisolated func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) {}
+
     // Swift name from the SDK rename diagnostic:
     // cameraDevice(_:didAddItems:) -> cameraDevice(_:didAdd:)
     // cameraDevice(_:didRemoveItems:) -> cameraDevice(_:didRemove:)
