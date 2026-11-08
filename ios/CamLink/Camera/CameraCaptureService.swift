@@ -19,7 +19,6 @@ final class CameraCaptureService: NSObject, ObservableObject {
     private var knownHandles = Set<String>()
     private let folder: URL
     private var downloading = Set<String>()
-    private var downloadSinks: [String: DownloadSink] = [:]
     private var downloadContexts: [String: DownloadContext] = [:]
 
     override init() {
@@ -101,7 +100,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
         return String(ObjectIdentifier(file).hashValue)
     }
 
-    private func download(_ file: ICCameraFile, on device: ICCameraDevice, key: String) {
+    private func download(_ file: ICCameraFile, on _: ICCameraDevice, key: String) {
         downloading.insert(key)
         let safe = Self.safeName(file.name ?? "IMG.JPG")
         let dest = folder.appendingPathComponent("\(Int(Date().timeIntervalSince1970))_\(safe)")
@@ -113,20 +112,17 @@ final class CameraCaptureService: NSObject, ObservableObject {
         status = "正在下載 \(safe)…"
         let ctx = DownloadContext(key: key, dest: dest, name: safe)
         downloadContexts[key] = ctx
-        // Separate NSObject sink avoids @MainActor vs ImageCaptureCore protocol isolation errors.
-        let sink = DownloadSink { [weak self] error, opts in
+        // Prefer completion API — avoids ICCameraDeviceDownloadDelegate / @objc selector mismatches
+        // that break EmitSwiftModule on latest Xcode.
+        _ = file.requestDownload(options: options) { [weak self] savedName, error in
             Task { @MainActor in
+                var opts: [AnyHashable: Any]?
+                if let savedName, !savedName.isEmpty {
+                    opts = ["ICSavedFilename": savedName]
+                }
                 self?.finishDownload(key: key, error: error, options: opts)
             }
         }
-        downloadSinks[key] = sink
-        device.requestDownloadFile(
-            file,
-            options: options,
-            downloadDelegate: sink,
-            didDownloadSelector: #selector(DownloadSink.didDownloadFile(_:error:options:contextInfo:)),
-            contextInfo: nil
-        )
     }
 
     private func finishDownload(
@@ -135,7 +131,6 @@ final class CameraCaptureService: NSObject, ObservableObject {
         options: [AnyHashable: Any]?
     ) {
         let ctx = downloadContexts.removeValue(forKey: key)
-        downloadSinks.removeValue(forKey: key)
         downloading.remove(key)
         guard let ctx else { return }
         if let error {
@@ -194,34 +189,11 @@ private final class DownloadContext: NSObject {
     }
 }
 
-/// Off-MainActor ObjC sink — signature must match latest ImageCaptureCore bridging.
-final class DownloadSink: NSObject, ICCameraDeviceDownloadDelegate {
-    private let onDone: ((Error?, [AnyHashable: Any]?) -> Void)
-
-    init(onDone: @escaping (Error?, [AnyHashable: Any]?) -> Void) {
-        self.onDone = onDone
-    }
-
-    @objc func didDownloadFile(
-        _ file: ICCameraFile,
-        error: Error?,
-        options: [AnyHashable: Any]?,
-        contextInfo: UnsafeMutableRawPointer?
-    ) {
-        onDone(error, options)
-    }
-}
-
 extension CameraCaptureService: ICDeviceBrowserDelegate {
     nonisolated func deviceBrowser(_ browser: ICDeviceBrowser, didAdd device: ICDevice, moreComing: Bool) {
         Task { @MainActor in
             guard self.camera == nil, let camera = device as? ICCameraDevice else { return }
-            let caps = camera.capabilities ?? []
-            // Prefer PTP-capable bodies; otherwise accept any local camera-class device.
-            if caps.contains(ICCameraDeviceCanAcceptPTPCommands)
-                || (device.type.rawValue & ICDeviceType.camera.rawValue) == ICDeviceType.camera.rawValue {
-                self.open(camera)
-            }
+            self.open(camera)
         }
     }
 

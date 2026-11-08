@@ -30,14 +30,17 @@ workflows:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build 2>&1 | tee /tmp/camlink-xcodebuild.log
-          status=${PIPESTATUS[0]}
+            build > /tmp/camlink-xcodebuild.log 2>&1
+          status=$?
           set -e
           if [ "$status" -ne 0 ]; then
+            echo "---- last 60 log lines ----"
+            tail -n 60 /tmp/camlink-xcodebuild.log || true
             echo "---- swift errors ----"
-            grep -E 'error:|fatal error:' /tmp/camlink-xcodebuild.log || true
+            grep -nE 'error:|fatal error:' /tmp/camlink-xcodebuild.log || true
             exit "$status"
           fi
+          echo "unsigned iphoneos build ok"
     artifacts:
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/Debug-iphoneos/*.app
     triggering:
