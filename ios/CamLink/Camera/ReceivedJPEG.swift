@@ -1,6 +1,6 @@
 import Foundation
 
-struct ReceivedJPEG: Identifiable, Equatable, Codable {
+struct ReceivedJPEG: Identifiable, Equatable, Codable, Sendable {
     let id: String
     let name: String
     let url: URL

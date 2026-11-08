@@ -1,3 +1,4 @@
+import ImageIO
 import SwiftUI
 import UIKit
 
@@ -5,9 +6,11 @@ struct RootView: View {
     @EnvironmentObject private var camera: CameraCaptureService
     @EnvironmentObject private var session: ShootSession
     @EnvironmentObject private var pair: PairStore
+    @EnvironmentObject private var webDAV: WebDAVStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = 0
     @State private var showPair = false
+    @State private var showWebDAV = false
     @State private var showScanner = false
     @State private var confirmFinger = false
     @State private var qrText = ""
@@ -15,6 +18,7 @@ struct RootView: View {
     @State private var showAbort = false
     @State private var pocket = false
     @State private var diagnosticURL: URL?
+    @State private var previewAspectRatio: CGFloat = 4.0 / 3.0
     private let paper = Color(red: 254 / 255, green: 253 / 255, blue: 251 / 255)
     private let ink = Color(red: 25 / 255, green: 25 / 255, blue: 27 / 255)
     private let soft = Color(red: 243 / 255, green: 242 / 255, blue: 238 / 255)
@@ -41,6 +45,9 @@ struct RootView: View {
         }
         .preferredColorScheme(.light)
         .sheet(isPresented: $showPair) { pairSheet }
+        .sheet(isPresented: $showWebDAV) {
+            WebDAVSettingsView(photos: session.photos).environmentObject(webDAV)
+        }
         .sheet(item: $selectedPhoto) { PhotoViewer(photo: $0) }
         .onOpenURL { url in
             if pair.applyQR(url.absoluteString) {
@@ -68,6 +75,17 @@ struct RootView: View {
         .onChange(of: session.photos.count) { _ in scheduleUpload() }
         .onChange(of: session.autoUpload) { _ in scheduleUpload() }
         .onChange(of: pair.pair) { _ in scheduleUpload() }
+        .onChange(of: webDAV.autoUpload) { _ in scheduleUpload() }
+        .onChange(of: webDAV.config?.id) { _ in scheduleUpload() }
+        .task(id: session.photos.first?.id) {
+            previewAspectRatio = 4.0 / 3.0
+            guard let url = session.photos.first?.url else { return }
+            let ratio = await Task.detached(priority: .utility) {
+                Self.photoAspectRatio(at: url)
+            }.value
+            guard !Task.isCancelled else { return }
+            previewAspectRatio = ratio
+        }
         .onAppear { scheduleUpload(); updateIdleTimer() }
         .onChange(of: camera.browsing) { _ in updateIdleTimer() }
         .onChange(of: scenePhase) { phase in
@@ -80,17 +98,17 @@ struct RootView: View {
         if tab == 0 {
             if wide {
                 HStack(alignment: .top, spacing: 20) {
-                    photoPanel(tall: true).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ScrollView { photoPanel }.frame(maxWidth: .infinity, maxHeight: .infinity)
                     ScrollView { homeControls.padding(20) }.frame(width: 380)
                 }.padding(20)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         destinationHeader
-                        photoPanel(tall: false)
+                        photoPanel
                         cameraControls
                         pocketButton
-                    }.padding(20)
+                    }.padding(20).frame(maxWidth: 760).frame(maxWidth: .infinity)
                 }
             }
         } else {
@@ -128,11 +146,11 @@ struct RootView: View {
         }
     }
 
-    private func photoPanel(tall: Bool) -> some View {
+    private var photoPanel: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .bottomTrailing) {
                 PhotoPreview(photo: session.photos.first)
-                    .frame(minHeight: tall ? 300 : 220, maxHeight: tall ? .infinity : 280)
+                    .aspectRatio(previewAspectRatio, contentMode: .fit)
                     .contentShape(Rectangle())
                     .onTapGesture { selectedPhoto = session.photos.first }
                 VStack(alignment: .trailing, spacing: 4) {
@@ -165,6 +183,18 @@ struct RootView: View {
         .clipShape(RoundedRectangle(cornerRadius: 20))
     }
 
+    private nonisolated static func photoAspectRatio(at url: URL) -> CGFloat {
+        // Read metadata, not full image pixels; account for EXIF rotation like PhotoPreview.
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue,
+              width.isFinite, height.isFinite, width > 0, height > 0 else { return 4.0 / 3.0 }
+        let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+        let swapsAxes = (5...8).contains(orientation)
+        return CGFloat(swapsAxes ? height / width : width / height)
+    }
+
     private func metric(_ label: String, _ value: Int) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("\(value)").font(.system(size: 28, weight: .semibold)).monospacedDigit()
@@ -193,7 +223,7 @@ struct RootView: View {
                 Button("開始接收新拍 JPG") {
                     camera.mode = .newPhotos
                     camera.startBrowsing()
-                }.buttonStyle(.borderedProminent).controlSize(.large)
+                }.buttonStyle(RootPrimaryButtonStyle()).controlSize(.large)
                 Button("接收卡內 JPG") {
                     camera.mode = .card
                     camera.startBrowsing()
@@ -207,7 +237,7 @@ struct RootView: View {
                         .font(.caption).monospacedDigit()
                 }
                 Button(camera.finishing ? "正在完成接收…" : "停拍並完成接收") { camera.finishReceiving() }
-                    .buttonStyle(.borderedProminent).controlSize(.large).disabled(camera.finishing)
+                    .buttonStyle(RootPrimaryButtonStyle()).controlSize(.large).disabled(camera.finishing)
                 Button("重新搜尋照片及重試") { camera.refreshContents() }
                     .buttonStyle(.bordered).disabled(!camera.connected || camera.finishing)
             }
@@ -260,7 +290,7 @@ struct RootView: View {
                 Text("指紋 \(pair.pair.shortFinger)").font(.footnote.monospaced())
             }
             Toggle("收下後自動傳到電腦", isOn: $session.autoUpload)
-            Button("配對／更改電腦") { showPair = true }.buttonStyle(.borderedProminent)
+            Button("配對／更改電腦") { showPair = true }.buttonStyle(RootPrimaryButtonStyle())
             Button("上傳待傳 JPG（\(session.pendingCount) 張）") {
                 Task { await session.uploadPending(using: pair.pair) }
             }.buttonStyle(.bordered).disabled(!pair.pair.isReady || session.uploading)
@@ -268,9 +298,48 @@ struct RootView: View {
             if !session.uploadMessage.isEmpty { Text(session.uploadMessage).font(.footnote) }
             Text("請讓 iPad 與電腦接收器在同一網路。只有 Receiver 回覆相同 SHA-256 才會標為已核對。")
                 .font(.footnote).foregroundStyle(.secondary)
-            Text("Google Drive、OneDrive、WebDAV 尚未移植，這版只提供本機保存與電腦 Receiver。")
-                .font(.footnote).foregroundStyle(.secondary)
+            Divider()
+            cloudDestinations
         }
+    }
+
+    private var cloudDestinations: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("雲端與其他目的地").font(.headline)
+            Button { showWebDAV = true } label: {
+                HStack {
+                    Image(systemName: "externaldrive.connected.to.line.below")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("WebDAV（NAS／雲端資料夾）").font(.subheadline.bold())
+                        Text(webDAV.config == nil ? "設定 HTTPS 資料夾與應用程式密碼" : "設定與查看 WebDAV 獨立傳送紀錄")
+                            .font(.caption)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                }
+            }.buttonStyle(.bordered)
+            Text("WebDAV 上傳後會下載核對原圖；預設不自動上傳，需自行啟用。")
+                .font(.caption).foregroundStyle(.secondary)
+            pendingCloud("Google Drive", note: "iOS 登入設定待完成，尚不可直接上傳")
+            pendingCloud("OneDrive", note: "Microsoft 登入回呼待確認，尚不可直接上傳")
+            ShareLink(items: session.photos.map(\.url)) {
+                Label("分享本場所有 JPG", systemImage: "square.and.arrow.up")
+            }.buttonStyle(.bordered).disabled(session.photos.isEmpty)
+            Text("可交給 Dropbox、Box、Google Photos、Flickr 等 App 的系統分享擴充功能。可選項目依安裝的 App 而定；分享不代表自動備份或已核對。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func pendingCloud(_ title: String, note: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "cloud").font(.title3)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.subheadline.bold())
+                Text(note).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "lock").foregroundStyle(.secondary)
+        }.padding(14).background(soft, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var advanced: some View {
@@ -286,8 +355,8 @@ struct RootView: View {
             Button("強制中止接收", role: .destructive) { showAbort = true }
                 .buttonStyle(.bordered).disabled(!camera.browsing)
             Button("產生 USB 相機診斷報告") { diagnosticURL = camera.diagnosticFile() }
-                .buttonStyle(.borderedProminent)
-            if let diagnosticURL { ShareLink("分享诊斷報告", item: diagnosticURL) }
+                .buttonStyle(RootPrimaryButtonStyle())
+            if let diagnosticURL { ShareLink("分享診斷報告", item: diagnosticURL) }
             Text("報告記錄授權、相機目錄與接收錯誤，不包含電腦配對碼。請保持 App 前景；鎖屏／切換 App 可能中斷 USB 接收。")
                 .font(.footnote).foregroundStyle(.secondary)
             Divider()
@@ -321,8 +390,14 @@ struct RootView: View {
     }
 
     private func scheduleUpload() {
-        guard session.autoUpload, pair.pair.isReady, scenePhase == .active else { return }
-        Task { await session.uploadPending(using: pair.pair) }
+        guard scenePhase == .active else { return }
+        if session.autoUpload, pair.pair.isReady {
+            Task { await session.uploadPending(using: pair.pair) }
+        }
+        if webDAV.autoUpload, webDAV.config != nil {
+            webDAV.enqueue(session.photos)
+            Task { await webDAV.uploadPending() }
+        }
     }
     private func updateIdleTimer() { UIApplication.shared.isIdleTimerDisabled = camera.browsing && scenePhase == .active }
 
@@ -364,5 +439,29 @@ struct RootView: View {
                 Button("取消", role: .cancel) {}
             } message: { Text(pair.message) }
         }
+    }
+}
+
+private struct RootPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.controlSize) private var controlSize
+
+    func makeBody(configuration: Configuration) -> some View {
+        let paper = Color(red: 254 / 255, green: 253 / 255, blue: 251 / 255)
+        let ink = Color(red: 25 / 255, green: 25 / 255, blue: 27 / 255)
+        let pressedInk = Color(red: 52 / 255, green: 52 / 255, blue: 56 / 255)
+        let disabledInk = Color(red: 94 / 255, green: 94 / 255, blue: 97 / 255)
+        let fill = isEnabled ? (configuration.isPressed ? pressedInk : ink) : disabledInk
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+
+        // Set the label's contrast here so the root's ink foreground cannot hide it.
+        configuration.label
+            .font(.body.weight(.semibold))
+            .foregroundStyle(paper)
+            .padding(.horizontal, 20)
+            .padding(.vertical, controlSize == .large ? 14 : 10)
+            .frame(minHeight: 44)
+            .background(fill, in: shape)
+            .contentShape(shape)
     }
 }

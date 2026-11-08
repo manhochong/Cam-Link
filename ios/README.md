@@ -4,22 +4,30 @@
 
 - 以 USB 線和 Apple `ImageCaptureCore` 尋找外接數位相機並接收 JPG/JPEG；相機 USB 模式須依型號實測，Android 使用的 **PC(Tether)** 模式不保證能向 iOS 提供完整目錄。
 - 使用既有 Cam Link Receiver，透過 TLS `:9443`、人工核對伺服器憑證指紋和 SHA-256 回覆確認傳輸。
-- 暫不包含相機 Wi‑Fi、FlashAir、Google Drive、OneDrive 或 WebDAV。這些 Android 功能不會自動出現在 iOS 版。
+- 候選 build 37 增加真正 WebDAV 原圖上傳與批量系統分享。Google Drive／OneDrive 直接登入仍待原生 OAuth 設定，不包含相機 Wi‑Fi 或 FlashAir；不能把分享介面當成雲端已核對。
 - ImageCaptureCore 是 iOS 可用的 [Apple 官方相機匯入介面](https://developer.apple.com/documentation/imagecapturecore)；它不是 Android 的原始 USB bulk API。不同相機、韌體和 USB 轉接器仍需逐台實測。
 
-### build 36：iPad 接收與 QR 配對修正候選版
+### build 37：空目錄 PTP 備援與介面修正候選版
 
-build 33 已由使用者回報無法從相機收到照片，而且介面不對應 Android；因此 build 36 仍是待驗證候選版，不代表已達成相機功能驗收。修正包含相機授權流程、完整目錄門檻、逐張下載、掉線回呼隔離與 JPG 完整性檢查；主畫面改為 Android 對應的首頁／紀錄／傳送／更多，提供照片預覽、統計與 iPad 橫向左右分區。
+build 36 的 DC-S1RM2／iPadOS 26.5.2 診斷顯示授權、session 和 PTP 事件均成功，但三次 native 目錄為空，沒有開始下載。build 37 在空目錄時使用原生 PTP command 介面，重新查詢物件 handle，再取得 ObjectInfo／JPG。只發送標準唯讀命令；不開啟第二個 USB session、不改拍攝設定、不刪相機照片。非空 native 目錄仍保留原有 ImageCaptureCore 路徑。
+
+此候選版亦修正黑底主按鈕的文字對比，並用原圖 metadata／EXIF 方向決定照片比例，未收到照片時使用 4:3 預覽；iPad 直向不再把預覽固定壓成矮長框。431 項 PTP codec 離線檢查及 reader 的 iPhone SDK smoke 已通過，但完整候選 build 與 DC-S1RM2 實機接收仍須驗證，不能只憑編譯判定支援成功。
 
 build 35 雖成功上傳，Apple 後續處理以 `90683` 指出封裝檔缺少相機用途說明。build 36 改為直接使用已提交的 Info.plist，不讓 XcodeGen 覆寫用途與 QR Scheme，並在 CI 驗證最終 IPA 的這些欄位。`python3 ios/verify_metadata.py <Info.plist 或 IPA 路徑>` 可重用此檢查。
 
-2026-11-08 已完成 build 36 合規聲明及 `CamLink Internal` 指派，App Store Connect 顯示 `Testing`。在 iPad 開啟 TestFlight，選 Cam Link 並更新，確認版本為 `0.2.25 (36)`；若未立即看到，重新開啟 TestFlight，或在 App 詳情的 Previous Builds 選取此 build。先測「接收卡內 JPG」，再測新拍接收，兩者模式不同。
+目前已確認可安裝的是 build 36。build 37 尚待完整簽名建置和 TestFlight 群組確認，確認後才更新到 `0.2.25 (37)`。測試時先用「接收卡內 JPG」收一張原有照片，再停止並重新選「開始接收新拍 JPG」，等完成 fresh baseline 後才拍新照片；兩者模式不同。
 
 在「傳送」→「配對／更改電腦」→「掃描電腦 QR Code」掃描 Windows 或 Mac Receiver 的配對 QR，或用系統相機掃描後開啟 Cam Link。QR 只預填電腦地址與配對碼；仍需按「探測並顯示指紋」，核對與接收器畫面相同後完成配對。iPad 不需要使用 Mac 作為接收電腦，Windows Receiver 也使用相同的配對與 HTTPS 協定。
 
 首頁的「開始接收新拍 JPG」會在完整目錄就緒後略過既有照片，等待新拍的 JPG。「接收卡內 JPG」才會匯入記憶卡原有 JPG；重新連接要補收未完成照片時請選這個模式。同名且相同 SHA-256 的本機照片不會重複加入。按「停拍並完成接收」會先完成已排入佇列的檔案；請保持相機接線，直到顯示已停止。
 
 若相機無法找到或收檔失敗，在「更多」按「產生 USB 相機診斷報告」後分享報告，並附上相機型號、USB 模式、iPad 型號及 iPadOS 版本。App 不會重設系統權限，也不會刪除或修改相機內的照片。USB 接收期間請保持 App 前景；黑色口袋畫面不是背景服務，也不保證鎖屏仍能接收。
+
+### 多目的地傳送
+
+WebDAV 在「傳送」→「WebDAV（NAS／雲端資料夾）」設定已有可寫入的 HTTPS 資料夾、帳號和應用程式密碼。密碼只存 Keychain；儲存設定沒有測試遠端登入。預設關閉自動傳送，可按「上傳本場 JPG」，或自行啟用。上傳後會以 GET 讀回原圖並比對大小和 SHA-256，完成才算 WebDAV 已核對；同名不同內容不覆寫，也不修改電腦 Receiver 的核對狀態。
+
+「分享本場所有 JPG」使用系統分享，可交給已安裝的 Dropbox／Box／Google Photos／Flickr 等服務擴充功能。實際可選項目依其 iPad App 支援而定；這不是 Cam Link 自動雲端備份。Google Drive／OneDrive 顯示登入設定待完成，未啟用假登入；參見 `CLOUD_PARITY.md` 和 `WEBDAV.md`。
 
 ## 沒有 Mac：使用 Codemagic
 

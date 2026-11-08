@@ -42,7 +42,12 @@ final class CameraCaptureService: NSObject, ObservableObject {
     private var timer: Timer?
     private var downloadBegan: Date?
     private var began = Date()
+    private var catalogSignature = ""
     private var folder: URL
+    // Sticky for this session: native downloads and raw commands never overlap.
+    private var ptpSelected = false
+    private var ptpAuthorizing = false
+    private var ptpReceiver: PTPPhotoReceiver?
 
     private struct DownloadJob {
         let file: ICCameraFile
@@ -66,6 +71,10 @@ final class CameraCaptureService: NSObject, ObservableObject {
         guard !browsing else { return }
         generation = UUID()
         let token = generation
+        ptpReceiver?.cancel()
+        ptpReceiver = nil
+        ptpSelected = false
+        ptpAuthorizing = false
         known.removeAll()
         failed.removeAll()
         queue.removeAll()
@@ -78,6 +87,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
         catalogCount = 0
         queuedCount = 0
         began = Date()
+        catalogSignature = ""
         browsing = true
         status = "正在要求相機存取權限…"
         record("START mode=\(mode.rawValue)")
@@ -125,6 +135,19 @@ final class CameraCaptureService: NSObject, ObservableObject {
     /// Stop only after all already-queued originals have completed; keep the cable connected.
     func finishReceiving() {
         guard browsing else { return }
+        if ptpSelected, connected {
+            finishing = true
+            status = "正在完成 PTP 接收，請保持相機連線…"
+            record("DRAIN_PTP pending=\(queuedCount)")
+            // Includes a baseline still in progress and a final full inventory.
+            if let ptpReceiver { ptpReceiver.finish() }
+            else if !ptpAuthorizing {
+                let reason = lastError.isEmpty ? "PTP 尚未就緒；請匯出診斷。" : lastError
+                stopBrowsing()
+                fail(reason)
+            }
+            return
+        }
         guard connected, catalogReady else { stopBrowsing(); return }
         finishing = true
         status = "正在完成接收，請保持相機連線…"
@@ -136,6 +159,11 @@ final class CameraCaptureService: NSObject, ObservableObject {
         generation = UUID()
         timer?.invalidate()
         timer = nil
+        // Poison/cancel raw callbacks BEFORE Apple closes its owned session.
+        ptpReceiver?.cancel()
+        ptpReceiver = nil
+        ptpSelected = false
+        ptpAuthorizing = false
         browser.stop()
         let oldCamera = camera
         camera = nil
@@ -158,6 +186,11 @@ final class CameraCaptureService: NSObject, ObservableObject {
         failedCount = 0
         lastError = ""
         record("MANUAL_RETRY")
+        if ptpSelected {
+            if let ptpReceiver { ptpReceiver.retryFailed() }
+            else { authorizePTPFallback(camera) }
+            return
+        }
         if !catalogReady, camera.contentCatalogPercentCompleted >= 100 {
             ready(camera)
         } else if catalogReady {
@@ -167,6 +200,8 @@ final class CameraCaptureService: NSObject, ObservableObject {
 
     private func tick() {
         guard browsing else { return }
+        // Receiver owns its own idle-only 2-second reconciliation timer.
+        guard !ptpSelected else { return }
         if active != nil, let downloadBegan, Date().timeIntervalSince(downloadBegan) > 120 {
             record("DOWNLOAD_TIMEOUT")
             stopBrowsing()
@@ -211,13 +246,24 @@ final class CameraCaptureService: NSObject, ObservableObject {
     }
 
     private func ready(_ device: ICCameraDevice) {
-        guard device === camera, connected, browsing, !catalogReady else { return }
+        guard device === camera, connected, browsing, !catalogReady, !ptpSelected else { return }
         let inventory = files(device)
         catalogCount = inventory.count
+        recordCatalog(device, inventory: inventory, reason: "READY", force: true)
+        if inventory.isEmpty, active == nil, queue.isEmpty {
+            ptpSelected = true
+            catalogReady = false
+            timer?.invalidate()
+            timer = nil
+            status = "原生目錄為空，正在查詢 PTP 新目錄，請先不要拍攝…"
+            record("PTP_FALLBACK_SELECTED nativeComplete=\(device.contentCatalogPercentCompleted) nativeObjects=0 nativePending=0")
+            authorizePTPFallback(device)
+            return
+        }
         catalogReady = true
         if mode == .newPhotos {
             known.formUnion(inventory.map(fileKey))
-            status = "可以拍攝 · 等待新 JPG"
+            status = inventory.isEmpty ? "相機已連線 · 尚未找到相片物件" : "可以拍攝 · 等待新 JPG"
             record("BASELINE objects=\(inventory.count)")
         } else {
             record("CATALOG_READY objects=\(inventory.count)")
@@ -226,14 +272,84 @@ final class CameraCaptureService: NSObject, ObservableObject {
     }
 
     private func ingest(_ device: ICCameraDevice) {
-        guard device === camera, connected, catalogReady, browsing, !finishing else { return }
+        guard !ptpSelected, device === camera, connected, catalogReady, browsing, !finishing else { return }
         let inventory = files(device)
         catalogCount = inventory.count
+        recordCatalog(device, inventory: inventory, reason: "CHANGED")
         enqueue(inventory)
     }
 
+    private func authorizePTPFallback(_ device: ICCameraDevice) {
+        guard ptpSelected, !ptpAuthorizing, ptpReceiver == nil, device === camera,
+              connected, browsing, active == nil, queue.isEmpty else { return }
+        ptpAuthorizing = true
+        let token = generation
+        status = "正在要求 PTP 讀取授權，請先不要拍攝…"
+        record("CONTROL_AUTH_REQUEST readOnlyPTP=true")
+        browser.requestControlAuthorization { [weak self] auth in
+            Task { @MainActor in
+                guard let self, token == self.generation, self.browsing,
+                      self.connected, device === self.camera, self.ptpSelected else { return }
+                self.ptpAuthorizing = false
+                self.authorization = "相機已允許 · 內容授權已允許 · PTP 授權 \(auth.rawValue)"
+                self.record("CONTROL_AUTH \(auth.rawValue)")
+                guard auth == .authorized else {
+                    let reason = "iPadOS 未允許 PTP 讀取授權；沒有傳送任何 PTP 命令。請確認權限後重新搜尋，或匯出診斷。"
+                    if self.finishing { self.stopBrowsing() }
+                    self.fail(reason)
+                    return
+                }
+                let reader = PTPCameraReader(camera: device) { [weak self] message in
+                    guard let self, token == self.generation else { return }
+                    self.record(message)
+                }
+                let receiver = PTPPhotoReceiver(reader: reader, mode: self.mode, folder: self.folder,
+                    trace: { [weak self] message in
+                        guard let self, token == self.generation else { return }
+                        self.record(message)
+                    }, onState: { [weak self] state in
+                        guard let self, token == self.generation, self.ptpSelected else { return }
+                        self.catalogCount = state.catalogCount
+                        self.queuedCount = state.queuedCount
+                        self.failedCount = state.failedCount
+                        self.receivedCount = state.receivedCount
+                        self.catalogReady = state.catalogReady
+                        self.finishing = state.finishing
+                        self.status = state.status
+                        self.lastError = state.lastError
+                    }, onJPEG: { [weak self] photo in
+                        guard let self, token == self.generation, self.ptpSelected else { return }
+                        self.onJPEG?(photo)
+                    }, onFinished: { [weak self] reason in
+                        guard let self, token == self.generation, self.ptpSelected else { return }
+                        self.stopBrowsing()
+                        if let reason { self.fail(reason) }
+                        else { self.status = self.receivedCount == 0 ? "已停止接收 · 本次沒有接收 JPG" : "已完成接收" }
+                    })
+                self.ptpReceiver = receiver
+                // Calling finish before start prevents its initial State from
+                // briefly clearing a user's drain request during authorization.
+                if self.finishing { receiver.finish() }
+                receiver.start()
+            }
+        }
+    }
+
+    private func recordCatalog(_ device: ICCameraDevice, inventory: [ICCameraFile], reason: String, force: Bool = false) {
+        let media = device.mediaFiles.map { String($0.count) } ?? "nil"
+        let contents = device.contents.map { String($0.count) } ?? "nil"
+        let jpegCount = inventory.filter(isJPEG).count
+        let signature = "\(device.contentCatalogPercentCompleted)|\(media)|\(contents)|\(inventory.count)|\(jpegCount)"
+        guard force || signature != catalogSignature else { return }
+        catalogSignature = signature
+        record("CATALOG_\(reason) percent=\(device.contentCatalogPercentCompleted) media=\(media) contents=\(contents) files=\(inventory.count) jpg=\(jpegCount) tethered=\(device.tetheredCaptureEnabled)")
+        for file in inventory.prefix(10) {
+            record("CATALOG_ITEM handle=\(file.ptpObjectHandle) name=\(file.name ?? "?") uti=\(file.uti ?? "?") bytes=\(file.fileSize) known=\(known.contains(fileKey(file)))")
+        }
+    }
+
     private func enqueue(_ items: [ICCameraFile]) {
-        guard catalogReady, !finishing else { return }
+        guard !ptpSelected, catalogReady, !finishing else { return }
         for file in items where isJPEG(file) {
             let key = fileKey(file)
             guard !known.contains(key), !failed.contains(key), active?.key != key,
@@ -262,11 +378,15 @@ final class CameraCaptureService: NSObject, ObservableObject {
     }
 
     private func downloadNext() {
-        guard connected, active == nil else { return }
+        guard !ptpSelected, connected, active == nil else { return }
         guard !queue.isEmpty else {
             queuedCount = 0
             if finishing { stopBrowsing() }
-            else if failed.isEmpty { status = mode == .card ? "卡內 JPG 已收下 · 等待新 JPG" : "可以拍攝 · 等待新 JPG" }
+            else if failed.isEmpty, lastError.isEmpty {
+                if catalogCount == 0 { status = "相機已連線 · 尚未找到相片物件" }
+                else if mode == .card, receivedCount == 0 { status = "目錄尚無可接收的 JPG · 請確認照片格式" }
+                else { status = mode == .card ? "卡內 JPG 已收下 · 等待新 JPG" : "可以拍攝 · 等待新 JPG" }
+            }
             return
         }
         let job = queue.removeFirst()
@@ -284,7 +404,11 @@ final class CameraCaptureService: NSObject, ObservableObject {
         _ = job.file.requestDownload(options: options) { [weak self] savedName, error in
             Task { @MainActor in
                 guard let self, token == self.generation, self.active?.key == job.key else { return }
-                if let error { self.downloadFailed(job, error.localizedDescription); return }
+                if let error {
+                    self.record("DOWNLOAD_ERROR \((error as NSError).domain)/\((error as NSError).code)")
+                    self.downloadFailed(job, error.localizedDescription)
+                    return
+                }
                 var path = job.dest
                 if let savedName, !savedName.isEmpty {
                     path = savedName.hasPrefix("/") ? URL(fileURLWithPath: savedName)
@@ -334,10 +458,27 @@ final class CameraCaptureService: NSObject, ObservableObject {
 
     func diagnosticFile() -> URL? {
         let info = Bundle.main.infoDictionary ?? [:]
-        let header = "Cam Link \(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))\n\(UIDevice.current.model) / \(UIDevice.current.systemName) \(UIDevice.current.systemVersion)\n\(authorization)\nstatus=\(status) catalog=\(catalogCount) pending=\(queuedCount) failed=\(failedCount)\nNo receiver passwords or pairing codes are included.\n\n"
+        if let camera { recordCatalog(camera, inventory: files(camera), reason: "REPORT", force: true) }
+        let header = "Cam Link \(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))\n\(UIDevice.current.model) / \(UIDevice.current.systemName) \(UIDevice.current.systemVersion)\n\(authorization)\nmode=\(mode.rawValue) camera=\(cameraName)\nbrowsing=\(browsing) connected=\(connected) catalogReady=\(catalogReady) finishing=\(finishing)\nstatus=\(status) catalog=\(catalogCount) pending=\(queuedCount) failed=\(failedCount) received=\(receivedCount)\nlastError=\(lastError)\nNo receiver passwords or pairing codes are included.\n\n"
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("CamLink-camera-diagnostics.txt")
         do { try (header + logLines.joined(separator: "\n")).write(to: path, atomically: true, encoding: .utf8); return path }
         catch { lastError = "無法匯出診斷：\(error.localizedDescription)"; return nil }
+    }
+
+    nonisolated static func describePTPEvent(_ data: Data) -> String {
+        let bytes = Array(data.prefix(64))
+        let hex = bytes.map { String(format: "%02X", $0) }.joined()
+        guard bytes.count >= 12 else { return "bytes=\(data.count) unparsed hex=\(hex)" }
+        func u16(_ offset: Int) -> UInt16 { UInt16(bytes[offset]) | UInt16(bytes[offset + 1]) << 8 }
+        func u32(_ offset: Int) -> UInt32 {
+            UInt32(bytes[offset]) | UInt32(bytes[offset + 1]) << 8 | UInt32(bytes[offset + 2]) << 16 | UInt32(bytes[offset + 3]) << 24
+        }
+        guard u32(0) == data.count, u16(4) == 4 else {
+            return "bytes=\(data.count) unparsed hex=\(hex)"
+        }
+        let parameters = stride(from: 12, to: min(bytes.count - 3, 24), by: 4)
+            .map { String(format: "%08X", u32($0)) }.joined(separator: ",")
+        return "bytes=\(data.count) code=\(String(format: "%04X", u16(6))) transaction=\(u32(8)) params=\(parameters) hex=\(hex)"
     }
 
     nonisolated static func safeName(_ raw: String) -> String {
@@ -349,9 +490,9 @@ final class CameraCaptureService: NSObject, ObservableObject {
         return String(clean.prefix(140)) + ".jpg"
     }
 
-    private struct VerifiedJPEG: Sendable { let bytes: Int64; let sha: String }
-    private struct ValidationError: LocalizedError { let errorDescription: String? }
-    nonisolated private static func validateJPEG(_ path: URL, expected: Int64) -> Result<VerifiedJPEG, ValidationError> {
+    struct VerifiedJPEG: Sendable { let bytes: Int64; let sha: String }
+    struct ValidationError: LocalizedError, Sendable { let errorDescription: String? }
+    nonisolated static func validateJPEG(_ path: URL, expected: Int64) -> Result<VerifiedJPEG, ValidationError> {
         do {
             let data = try Data(contentsOf: path, options: .mappedIfSafe)
             guard data.count >= 4, data[0] == 0xFF, data[1] == 0xD8,
@@ -397,10 +538,17 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
     nonisolated func device(_ device: ICDevice, didOpenSessionWithError error: (any Error)?) {
         Task { @MainActor in
             guard device === self.camera, self.browsing else { return }
-            if let error { self.fail("無法開啟相機：\(error.localizedDescription)"); return }
+            if let error {
+                self.record("SESSION_OPEN_ERROR \((error as NSError).domain)/\((error as NSError).code)")
+                self.stopBrowsing()
+                self.fail("無法開啟相機：\(error.localizedDescription)")
+                return
+            }
             self.connected = true
+            self.lastError = ""
             self.status = "正在讀取相機目錄，請先不要拍攝…"
             self.record("SESSION_OPEN")
+            self.record("CAPABILITIES \(String(describing: device.capabilities))")
             if let camera = device as? ICCameraDevice, camera.contentCatalogPercentCompleted >= 100 { self.ready(camera) }
         }
     }
@@ -416,6 +564,7 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
     nonisolated func device(_ device: ICDevice, didEncounterError error: (any Error)?) {
         Task { @MainActor in
             guard device === self.camera, let error else { return }
+            self.record("DEVICE_ERROR \((error as NSError).domain)/\((error as NSError).code)")
             self.fail(error.localizedDescription)
         }
     }
@@ -436,6 +585,7 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
         Task { @MainActor in
             guard camera === self.camera, self.connected, self.browsing else { return }
             self.record("ITEMS_ADDED count=\(items.count) ready=\(self.catalogReady)")
+            guard !self.ptpSelected else { return }
             // Initial catalog events belong to the baseline, not live arrivals.
             if self.catalogReady { self.enqueue(items.compactMap { $0 as? ICCameraFile }); self.ingest(camera) }
         }
@@ -446,7 +596,11 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
     nonisolated func cameraDevice(_ camera: ICCameraDevice, didReceivePTPEvent eventData: Data) {
         Task { @MainActor in
             guard camera === self.camera else { return }
-            self.record("PTP_EVENT bytes=\(eventData.count)")
+            self.record("PTP_EVENT \(Self.describePTPEvent(eventData))")
+            if self.ptpSelected {
+                if let event = PTPCodec.event(eventData) { self.ptpReceiver?.receiveEvent(event) }
+                return
+            }
             self.ingest(camera)
         }
     }
