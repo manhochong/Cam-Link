@@ -31,4 +31,9 @@ Mac QR 編碼器產生的三個測試配對碼，已用獨立 ZXing 解碼器讀
 
 ## 分發限制
 
-目前 ZIP 是內部候選測試包，不是已完成 Developer ID 簽名及 Apple 公證的正式 Mac 安裝包。Go 的 ARM64 內嵌程式碼簽章不等於 Developer ID 發布簽章；macOS Gatekeeper 可能拒絕直接開啟下載的 App。不要要求測試者全域關閉 Gatekeeper。正式對外分發前，應在 Mac CI 使用適當的 Developer ID 憑證、公證及票證 stapling；目前既有 Apple Distribution 憑證是 iOS 用，不應直接冒充 Mac Developer ID。
+目前 ZIP 是內部候選測試包，不是已完成 Developer ID 簽名及 Apple 公證的正式 Mac 安裝包。Go 的 ARM64 內嵌程式碼簽章不等於 Developer ID 發布簽章；macOS Gatekeeper 可能拒絕直接開啟下載的 App。不要要求測試者全域關閉 Gatekeeper。正式對外分發前，應在 Mac CI 使用適當的 Developer ID 憑證、公證及票證 stapling；目前既有 Apple Distribution 憑證是 iOS 用，不應直接冒充 Mac Developer ID。[1] [2]
+
+## References
+
+[1]: https://developer.apple.com/developer-id/ "Apple Developer ID and Gatekeeper"
+[2]: https://developer.apple.com/macos/distribution/ "Apple distributing software on macOS"

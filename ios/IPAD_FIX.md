@@ -24,6 +24,10 @@
 
 修正來源已推送 GitHub main，commit `b7fa11f`。本機 Swift 語法解析及 plist 格式檢查通過；手動啟動的 iOS smoke build `6af02c1024e1ec2375576d22` 已完成，記錄顯示 `unsigned iphoneos build ok`。後續補上 120 秒單檔下載逾時保護的 commit `eea7264` 也已完成 signed IPA 建置。該 build 34 工作 `6af02cc124e1ec2375576d42` 已在 Publishing 階段取消，以納入使用者新回報的 QR 配對缺口；取消不能保證 Apple 完全未收到部分上傳。最新候選改為 build 35，仍待完整 Apple SDK 編譯、上傳與內部分發。網站保持私人預覽，不更新成新候選版可用。
 
+build 35 已成功編譯、簽名及上傳（工作 `6af02e3924e1ec2375576d8e`），但 Apple 處理回報 `90683: Missing purpose string`，最終 App 缺少 `NSCameraUsageDescription`。已找到 `project.yml` 的 `info.properties` 會重新產生並覆寫本地 Info.plist，原有用途說明及 `camlink` Scheme 都不在該生成設定中。
+
+最新候選改為 build 36。已移除 XcodeGen 的 Info.plist 生成區塊，保留已提交的 plist 作為單一來源。新增 `verify_metadata.py`，在 XcodeGen 後及最終簽名 IPA 中驗證相機／區網用途說明與 QR Scheme；缺少任一項會在上傳前直接讓 CI 失敗。這解決已確認的封裝問題，不代表已驗證 USB 相機硬件。
+
 ## 查驗來源
 
 Apple ICDeviceBrowser（內容與控制授權 API）：https://developer.apple.com/documentation/imagecapturecore/icdevicebrowser

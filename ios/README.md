@@ -2,14 +2,16 @@
 
 ## 目前 iOS 版本範圍
 
-- 以 USB 線和 Apple `ImageCaptureCore` 尋找外接數位相機並接收 JPG/JPEG；LUMIX 相機需選 **PC(Tether)**。
+- 以 USB 線和 Apple `ImageCaptureCore` 尋找外接數位相機並接收 JPG/JPEG；相機 USB 模式須依型號實測，Android 使用的 **PC(Tether)** 模式不保證能向 iOS 提供完整目錄。
 - 使用既有 Cam Link Receiver，透過 TLS `:9443`、人工核對伺服器憑證指紋和 SHA-256 回覆確認傳輸。
 - 暫不包含相機 Wi‑Fi、FlashAir、Google Drive、OneDrive 或 WebDAV。這些 Android 功能不會自動出現在 iOS 版。
 - ImageCaptureCore 是 iOS 可用的 [Apple 官方相機匯入介面](https://developer.apple.com/documentation/imagecapturecore)；它不是 Android 的原始 USB bulk API。不同相機、韌體和 USB 轉接器仍需逐台實測。
 
-### build 35：iPad 接收與 QR 配對修正候選版
+### build 36：iPad 接收與 QR 配對修正候選版
 
-build 33 已由使用者回報無法從相機收到照片，而且介面不對應 Android；因此 build 35 仍是待驗證候選版，不代表已達成相機功能驗收。修正包含相機授權流程、完整目錄門檻、逐張下載、掉線回呼隔離與 JPG 完整性檢查；主畫面改為 Android 對應的首頁／紀錄／傳送／更多，提供照片預覽、統計與 iPad 橫向左右分區。
+build 33 已由使用者回報無法從相機收到照片，而且介面不對應 Android；因此 build 36 仍是待驗證候選版，不代表已達成相機功能驗收。修正包含相機授權流程、完整目錄門檻、逐張下載、掉線回呼隔離與 JPG 完整性檢查；主畫面改為 Android 對應的首頁／紀錄／傳送／更多，提供照片預覽、統計與 iPad 橫向左右分區。
+
+build 35 雖成功上傳，Apple 後續處理以 `90683` 指出封裝檔缺少相機用途說明。build 36 改為直接使用已提交的 Info.plist，不讓 XcodeGen 覆寫用途與 QR Scheme，並在 CI 驗證最終 IPA 的這些欄位。`python3 ios/verify_metadata.py <Info.plist 或 IPA 路徑>` 可重用此檢查。
 
 在「傳送」→「配對／更改電腦」→「掃描電腦 QR Code」掃描 Windows 或 Mac Receiver 的配對 QR，或用系統相機掃描後開啟 Cam Link。QR 只預填電腦地址與配對碼；仍需按「探測並顯示指紋」，核對與接收器畫面相同後完成配對。iPad 不需要使用 Mac 作為接收電腦，Windows Receiver 也使用相同的配對與 HTTPS 協定。
 

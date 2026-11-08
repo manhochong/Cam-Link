@@ -16,6 +16,7 @@ workflows:
         script: |
           cd ios
           xcodegen generate
+          python3 verify_metadata.py CamLink/Info.plist
       - name: Build for iOS device (unsigned)
         script: |
           set -euo pipefail
@@ -27,6 +28,7 @@ workflows:
             -sdk iphoneos \
             -configuration Debug \
             -destination 'generic/platform=iOS' \
+            -derivedDataPath build/ios-smoke \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -40,9 +42,10 @@ workflows:
             grep -nE 'error:|fatal error:' /tmp/camlink-xcodebuild.log || true
             exit "$status"
           fi
+          python3 ios/verify_metadata.py build/ios-smoke/Build/Products/Debug-iphoneos/CamLink.app/Info.plist
           echo "unsigned iphoneos build ok"
     artifacts:
-      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/Debug-iphoneos/*.app
+      - build/ios-smoke/Build/Products/Debug-iphoneos/*.app
     triggering:
       events:
         - push
@@ -73,6 +76,7 @@ workflows:
         script: |
           cd ios
           xcodegen generate
+          python3 verify_metadata.py CamLink/Info.plist
       - name: Set up internal TestFlight signing
         script: |
           xcode-project use-profiles --custom-export-options='{"testFlightInternalTestingOnly": true}'
@@ -81,6 +85,12 @@ workflows:
           xcode-project build-ipa \
             --project "$CM_BUILD_DIR/ios/CamLink.xcodeproj" \
             --scheme "$XCODE_SCHEME"
+      - name: Verify signed IPA privacy and QR metadata
+        script: |
+          set -euo pipefail
+          ipa=$(find build/ios/ipa -name '*.ipa' -print -quit)
+          test -n "$ipa"
+          python3 ios/verify_metadata.py "$ipa"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
