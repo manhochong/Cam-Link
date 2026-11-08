@@ -21,6 +21,8 @@
 
 沙箱沒有 Apple SDK；必須以 Codemagic iPhoneOS build 驗證 Swift 編譯。新的候選 build 不代表已修復使用者相機，需在同一 iPad／相機上實測：授權、目錄、原有卡內 JPG、新拍 JPG、拔線／重接、停止排空及 Receiver 核對。
 
+修正來源已推送 GitHub main，commit `b7fa11f`。本機 Swift 語法解析及 plist 格式檢查通過；手動啟動的 iOS smoke build `6af02c1024e1ec2375576d22` 已完成，記錄顯示 `unsigned iphoneos build ok`。後續補上 120 秒單檔下載逾時保護，仍需以 signed build 驗證該最新來源。TestFlight build 34 尚未分發，網站仍保持私人預覽，不更新成新候選版可用。
+
 ## 查驗來源
 
 Apple ICDeviceBrowser（內容與控制授權 API）：https://developer.apple.com/documentation/imagecapturecore/icdevicebrowser

@@ -40,6 +40,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
     private var queue: [DownloadJob] = []
     private var active: DownloadJob?
     private var timer: Timer?
+    private var downloadBegan: Date?
     private var began = Date()
     private var folder: URL
 
@@ -165,7 +166,14 @@ final class CameraCaptureService: NSObject, ObservableObject {
     }
 
     private func tick() {
-        guard browsing, !finishing else { return }
+        guard browsing else { return }
+        if active != nil, let downloadBegan, Date().timeIntervalSince(downloadBegan) > 120 {
+            record("DOWNLOAD_TIMEOUT")
+            stopBrowsing()
+            fail("照片下載超過 120 秒未完成。請重新接線，選「接收卡內 JPG」補收，並匯出診斷。")
+            return
+        }
+        guard !finishing else { return }
         if let camera, connected {
             if !catalogReady, camera.contentCatalogPercentCompleted >= 100 { ready(camera) }
             else if catalogReady { ingest(camera) }
@@ -263,6 +271,7 @@ final class CameraCaptureService: NSObject, ObservableObject {
         }
         let job = queue.removeFirst()
         active = job
+        downloadBegan = Date()
         let token = generation
         queuedCount = queue.count + 1
         status = "正在接收 \(job.name)…"
