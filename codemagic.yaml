@@ -51,14 +51,16 @@ workflows:
           include: true
           source: true
 
-  ios-ad-hoc:
-    name: iOS Ad Hoc (signed IPA)
+  ios-testflight-internal:
+    name: iOS TestFlight Internal
     instance_type: mac_mini_m2
     max_build_duration: 60
+    integrations:
+      app_store_connect: CamLinkTestFlight
     environment:
       xcode: latest
       ios_signing:
-        distribution_type: ad_hoc
+        distribution_type: app_store
         bundle_identifier: hk.camlink.ios
       vars:
         BUNDLE_ID: hk.camlink.ios
@@ -71,8 +73,9 @@ workflows:
         script: |
           cd ios
           xcodegen generate
-      - name: Set up Ad Hoc code signing
-        script: xcode-project use-profiles
+      - name: Set up internal TestFlight signing
+        script: |
+          xcode-project use-profiles --custom-export-options='{"testFlightInternalTestingOnly": true}'
       - name: Build signed IPA
         script: |
           xcode-project build-ipa \
@@ -82,3 +85,9 @@ workflows:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        beta_groups:
+          - CamLink Internal

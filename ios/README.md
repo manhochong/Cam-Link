@@ -15,11 +15,15 @@
 2. 在 Codemagic 新增／選取這個 App，選 `ios-smoke` workflow，並使用 `main` 分支；目前 YAML 只會在 `main` push 時自動觸發，也可在 Codemagic 手動啟動。
 3. 建置成功後，到 Artifacts 下載 `CamLink.app`，查看 Codemagic build log 確認沒有 Swift 或 Xcode 錯誤。
 
-這個 smoke workflow **只驗證能否編譯，不會產生可安裝的簽名 IPA，也不能代替相機實機測試**。若要 Ad Hoc 安裝到 iPhone，請使用下方的 `ios-ad-hoc` workflow；TestFlight 或 App Store 則需另外設定相應的簽名與發佈流程。不要把憑證、私鑰或 API key 放進 Git。
+這個 smoke workflow **只驗證能否編譯，不會產生可安裝的簽名 IPA，也不會上傳 TestFlight，不能代替相機實機測試**。內部實機測試請使用下方手動啟動的 TestFlight workflow。不要把憑證、私鑰或 API key 放進 Git。
 
-### Ad Hoc 安裝到已登記 iPhone
+### TestFlight 內部測試（不需 UDID）
 
-根目錄另有手動啟動的 `ios-ad-hoc` workflow，會使用 `hk.camlink.ios` 的 Ad Hoc profile 簽名並輸出 `build/ios/ipa/*.ipa`。它不會在每次 `main` push 時自動執行；在 Codemagic 手動選 `ios-ad-hoc` 啟動即可。建置前，Apple Developer Program 帳戶中必須已登記目標 iPhone UDID，並為 bundle ID `hk.camlink.ios` 建立包含該裝置的 Ad Hoc provisioning profile；Codemagic 的 Code signing identities 需有對應 Apple Distribution certificate 和該 profile。不要把憑證、私鑰或 profile 加入 Git。
+根目錄的 `ios-testflight-internal` workflow 會以 `app_store` 簽名方式建置 IPA、標記為只供 TestFlight 內部測試，並上傳至 App Store Connect 的 `CamLink Internal` 群組。該 workflow 沒有 push trigger，必須在 Codemagic 手動選 `iOS TestFlight Internal` 啟動；`ios-smoke` 仍只在 `main` push 時自動執行。
+
+首次執行前，請在 App Store Connect 建立 bundle ID 為 `hk.camlink.ios` 的 App 記錄和內部測試群組 `CamLink Internal`，並把自己的 App Store Connect 使用者加入群組。Codemagic 的 Developer Portal integration/API key 名稱需與 YAML 的 `CamLinkTestFlight` 完全相同，並有 App Manager 權限；Code signing identities 亦須提供匹配的 Apple Distribution certificate 和 App Store provisioning profile。沒有這些設定時，TestFlight workflow 會在簽名或上傳階段失敗。
+
+建置成功並經 App Store Connect 處理後，受邀使用者在 iPhone 安裝 TestFlight App，並從邀請郵件接受 Cam Link 內部測試邀請。此流程不需要登記 UDID，也不是 App Store 公開上架；TestFlight 建置可測試 90 天。不要把憑證、私鑰、`.p8` API key 或 profile 加入 Git。
 
 ## 相機與接收器實機驗收
 
