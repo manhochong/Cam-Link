@@ -252,8 +252,8 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
         }
     }
 
-    // Latest ImageCaptureCore uses didAddItems / didRemoveItems (not didAdd / didRemove).
-    nonisolated func cameraDevice(_ camera: ICCameraDevice, didAddItems items: [ICCameraItem]) {
+    // Xcode latest ImageCaptureCore: cameraDevice(_:didAdd:) / didRemove: (Items labels are obsolete).
+    nonisolated func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) {
         Task { @MainActor in
             for item in items {
                 guard let file = item as? ICCameraFile, self.isJPEG(file) else { continue }
@@ -264,10 +264,10 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
         }
     }
 
-    nonisolated func cameraDevice(_ camera: ICCameraDevice, didRemoveItems items: [ICCameraItem]) {}
+    nonisolated func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {}
 
     nonisolated func cameraDevice(_ camera: ICCameraDevice, didAddItem item: ICCameraItem) {
-        cameraDevice(camera, didAddItems: [item])
+        cameraDevice(camera, didAdd: [item])
     }
 
     nonisolated func cameraDevice(_ camera: ICCameraDevice, didRemoveItem item: ICCameraItem) {}
