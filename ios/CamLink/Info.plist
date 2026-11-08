@@ -20,10 +20,21 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>hk.camlink.ios.pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array><string>camlink</string></array>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+		</dict>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Cam Link 需要相機存取權限，以授權 USB 外接相機的 JPG 匯入；不會自行拍攝或刪除相機內的照片。</string>
+	<string>Cam Link 使用相機掃描電腦配對 QR，並授權 USB 外接相機 JPG 匯入；不會儲存掃描畫面、拍攝或刪除外接相機內的照片。</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Cam Link 需要同一 Wi-Fi 連接電腦上的接收器。</string>
 	<key>UILaunchScreen</key>

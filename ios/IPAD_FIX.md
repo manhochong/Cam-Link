@@ -16,12 +16,13 @@
 - 記錄授權、相機發現、目錄、下載、錯誤與 PTP event 的診斷（不包含電腦密碼或配對码），可在更多頁匯出。
 - 原生 SwiftUI 對應 Android 主畫面配色、照片預覽、已收／待傳／電腦已核對統計、接收控制與四個導覽入口；iPad 橫向使用左右分區。
 - 保留本機 JPG、Keychain 配對與原有 Receiver SHA-256 回覆核對。Google Drive／OneDrive／WebDAV 尚未實作，不用假按鈕冒充已有。
+- 補上 `camlink` URL Scheme 與 `onOpenURL`：Windows 和 Mac Receiver 都產生 `camlink://pair?ip=…&code=…`。iOS 舊版未註冊／處理開啟網址，因此系統相機 QR 不能像 Android 一樣直接開啟配對頁。另加入 App 內 QR 掃描入口，掃描只預填地址／配對碼，仍須人工核對憑證指紋。
 
 ## 驗證界線
 
 沙箱沒有 Apple SDK；必須以 Codemagic iPhoneOS build 驗證 Swift 編譯。新的候選 build 不代表已修復使用者相機，需在同一 iPad／相機上實測：授權、目錄、原有卡內 JPG、新拍 JPG、拔線／重接、停止排空及 Receiver 核對。
 
-修正來源已推送 GitHub main，commit `b7fa11f`。本機 Swift 語法解析及 plist 格式檢查通過；手動啟動的 iOS smoke build `6af02c1024e1ec2375576d22` 已完成，記錄顯示 `unsigned iphoneos build ok`。後續補上 120 秒單檔下載逾時保護，仍需以 signed build 驗證該最新來源。TestFlight build 34 尚未分發，網站仍保持私人預覽，不更新成新候選版可用。
+修正來源已推送 GitHub main，commit `b7fa11f`。本機 Swift 語法解析及 plist 格式檢查通過；手動啟動的 iOS smoke build `6af02c1024e1ec2375576d22` 已完成，記錄顯示 `unsigned iphoneos build ok`。後續補上 120 秒單檔下載逾時保護的 commit `eea7264` 也已完成 signed IPA 建置。該 build 34 工作 `6af02cc124e1ec2375576d42` 已在 Publishing 階段取消，以納入使用者新回報的 QR 配對缺口；取消不能保證 Apple 完全未收到部分上傳。最新候選改為 build 35，仍待完整 Apple SDK 編譯、上傳與內部分發。網站保持私人預覽，不更新成新候選版可用。
 
 ## 查驗來源
 

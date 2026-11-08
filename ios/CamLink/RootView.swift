@@ -8,6 +8,7 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = 0
     @State private var showPair = false
+    @State private var showScanner = false
     @State private var confirmFinger = false
     @State private var qrText = ""
     @State private var selectedPhoto: ReceivedJPEG?
@@ -41,6 +42,15 @@ struct RootView: View {
         .preferredColorScheme(.light)
         .sheet(isPresented: $showPair) { pairSheet }
         .sheet(item: $selectedPhoto) { PhotoViewer(photo: $0) }
+        .onOpenURL { url in
+            if pair.applyQR(url.absoluteString) {
+                tab = 2
+                showPair = true
+            } else {
+                pair.message = "這不是有效的 Cam Link 電腦配對 QR。"
+                tab = 2
+            }
+        }
         .fullScreenCover(isPresented: $pocket) {
             ZStack {
                 Color.black.ignoresSafeArea()
@@ -319,6 +329,11 @@ struct RootView: View {
     private var pairSheet: some View {
         NavigationStack {
             Form {
+                Section {
+                    Button("掃描電腦 QR Code") { showScanner = true }
+                    Text("Windows 接收器按「開始接收」→「顯示 QR 掃描」。掃描後仍要核對電腦指紋，不需 Mac。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Section("手打或貼上 QR 內容") {
                     TextField("電腦 IPv4", text: $pair.draftHost).keyboardType(.decimalPad).textInputAutocapitalization(.never)
                     SecureField("配對碼（12 位）", text: $pair.draftCode).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -335,6 +350,13 @@ struct RootView: View {
             }
             .navigationTitle("配對電腦")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("關閉") { showPair = false } } }
+            .sheet(isPresented: $showScanner) {
+                PairQRScanner { raw in
+                    guard pair.applyQR(raw) else { return false }
+                    showScanner = false
+                    return true
+                }
+            }
             .alert("核對電腦指紋", isPresented: $confirmFinger) {
                 Button("相同，完成配對") {
                     Task { await pair.confirmFingerprint(); if pair.pair.isReady { showPair = false } }
