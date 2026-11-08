@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"embed"
 	"encoding/hex"
@@ -28,7 +30,11 @@ var deskFiles embed.FS
 const appVersion = "0.2.25"
 
 type fileRow struct {
-	Time, Name, Size, Rate, Status string
+	Time   string `json:"time"`
+	Name   string `json:"name"`
+	Size   string `json:"size"`
+	Rate   string `json:"rate"`
+	Status string `json:"status"`
 }
 
 type desk struct {
@@ -58,10 +64,16 @@ type desk struct {
 	inbox      *http.Server
 	quit       chan struct{}
 	quitAt     time.Time
+	uiToken    string
 }
 
 func desktop() error {
 	d := &desk{quit: make(chan struct{}), byID: map[string]int{}}
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return err
+	}
+	d.uiToken = hex.EncodeToString(secret)
 	d.folder = d.rememberedFolder()
 	liveMu.Lock()
 	liveFn = d.onLive
@@ -73,6 +85,7 @@ func desktop() error {
 	mux := http.NewServeMux()
 	page, _ := fs.ReadFile(deskFiles, "ui.html")
 	logo, _ := fs.ReadFile(deskFiles, "logo.png")
+	page = bytes.ReplaceAll(page, []byte("__CAMLINK_UI_TOKEN__"), []byte(d.uiToken))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -105,7 +118,7 @@ func desktop() error {
 	mux.HandleFunc("/api/preview", func(w http.ResponseWriter, r *http.Request) { d.preview(w, r) })
 	mux.HandleFunc("/api/quit", func(w http.ResponseWriter, r *http.Request) { d.armQuit(); w.WriteHeader(204) })
 	mux.HandleFunc("/photo", func(w http.ResponseWriter, r *http.Request) { d.photoFile(w, r) })
-	ui := &http.Server{Handler: mux}
+	ui := &http.Server{Handler: protectDesktop(mux, ln.Addr().String(), d.uiToken), ReadHeaderTimeout: 8 * time.Second}
 	go ui.Serve(ln)
 	url := "http://" + ln.Addr().String() + "/"
 	if err = exec.Command("open", url).Start(); err != nil {
@@ -132,6 +145,34 @@ func desktop() error {
 	d.stop()
 	ui.Close()
 	return nil
+}
+
+// The desktop browser page is local-only. The paired mobile client still uses
+// the separate authenticated HTTPS /inbox listener on port 9443.
+func protectDesktop(next http.Handler, host, token string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Host != host || (r.Header.Get("Origin") != "" && r.Header.Get("Origin") != "http://"+host) {
+			http.Error(w, "Forbidden origin", http.StatusForbidden)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/photo" {
+			provided := r.Header.Get("X-CamLink-UI-Token")
+			if r.URL.Path == "/photo" || r.URL.Path == "/api/quit" {
+				provided = r.URL.Query().Get("session")
+			}
+			if token == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
+				http.Error(w, "Forbidden session", http.StatusForbidden)
+				return
+			}
+			readOnly := r.URL.Path == "/api/state" || r.URL.Path == "/photo"
+			if (readOnly && r.Method != http.MethodGet) || (!readOnly && r.Method != http.MethodPost) {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type statusWriter struct {
@@ -227,7 +268,7 @@ func (d *desk) writeState(w http.ResponseWriter) {
 		"photoName": d.photoName, "files": d.files, "qr": d.qr,
 	}
 	if d.photo != "" {
-		body["photo"] = "/photo?w=1800&t=" + strconv.FormatInt(d.photoAt, 10)
+		body["photo"] = "/photo?w=1800&t=" + strconv.FormatInt(d.photoAt, 10) + "&session=" + d.uiToken
 	}
 	body["autoStart"] = autoStartOn()
 	if d.ip == "" && len(ips) > 0 {
@@ -402,18 +443,13 @@ func (d *desk) rescan(w http.ResponseWriter) {
 	known := map[string]bool{}
 	for i := range d.files {
 		known[d.files[i].Name] = true
-		if d.files[i].Status != "已核對" {
-			d.files[i].Status = "已核對"
-		}
 	}
 	added := 0
 	for _, f := range found {
 		if known[f.name] {
 			continue
 		}
-		d.files = append([]fileRow{{f.mod.Format("15:04:05"), f.name, amount(f.size) + " / " + amount(f.size), "—", "已核對"}}, d.files...)
-		d.verified++
-		d.bytes += f.size
+		d.files = append(d.files, fileRow{f.mod.Format("15:04:05"), f.name, amount(f.size), "—", "本機檔案"})
 		added++
 		known[f.name] = true
 	}
@@ -422,12 +458,12 @@ func (d *desk) rescan(w http.ResponseWriter) {
 		d.photoName = found[0].name
 		d.photoAt = time.Now().UnixNano()
 		d.photoThumb = nil
-		d.state = "剛核對一張"
+		d.state = "資料夾已重新整理"
 		d.current = found[0].name
-		d.speed = "已補核對資料夾內 " + itoa(int64(len(found))) + " 張"
+		d.speed = "找到資料夾內 " + itoa(int64(len(found))) + " 張 JPG；不代表傳送雜湊已核對"
 	}
 	d.mu.Unlock()
-	notify("補核對完成", "資料夾內 "+itoa(int64(len(found)))+" 張 JPG")
+	notify("資料夾已重新整理", "找到 "+itoa(int64(len(found)))+" 張 JPG；原有傳送核對狀態不變")
 	writeJSON(w, 200, map[string]any{"ok": true, "count": len(found), "added": added})
 }
 

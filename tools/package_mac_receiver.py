@@ -32,16 +32,15 @@ for i, (cpu, sub, thin) in enumerate(images):
     struct.pack_into(">IIIII", fat, 8+i*20, cpu, sub, len(fat), len(thin), 14)
     fat.extend(thin)
 def png_square(src, size):
-    from PySide6.QtCore import QBuffer, QIODevice, Qt
-    from PySide6.QtGui import QImage
-    image = QImage()
-    if not image.loadFromData(src):
-        raise RuntimeError("logo unreadable")
-    scaled = image.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-    buf = QBuffer()
-    buf.open(QIODevice.WriteOnly)
-    scaled.save(buf, "PNG")
-    return bytes(buf.data())
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    image = Image.open(BytesIO(src)).convert("RGBA")
+    scaled = ImageOps.contain(image, (size, size), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (size, size))
+    canvas.alpha_composite(scaled, ((size - scaled.width) // 2, (size - scaled.height) // 2))
+    buf = BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue()
 
 def icns(png):
     chunks = []
@@ -54,7 +53,7 @@ def icns(png):
 app = "Cam Link Receiver.app/Contents/"
 info = dict(CFBundleIdentifier="hk.camlink.receiver", CFBundleName="Cam Link Receiver",
             CFBundleExecutable="CamLinkReceiver", CFBundlePackageType="APPL", CFBundleIconFile="AppIcon",
-            CFBundleVersion="32", CFBundleShortVersionString="0.2.25",
+            CFBundleVersion="35", CFBundleShortVersionString="0.2.25",
             NSLocalNetworkUsageDescription="接收配對手機經本機網絡傳送的相片。")
 out = root / "release/CamLink-Receiver-macOS.zip"
 icon = icns((root / "release/brand/Cam-Link.png").read_bytes())

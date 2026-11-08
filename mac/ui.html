@@ -104,7 +104,7 @@ select,input{width:100%;height:36px;border:1px solid var(--line);border-radius:8
         <label class="folder">JPG 儲存資料夾<button id="open" type="button">開啟資料夾</button></label>
         <div class="path"><input id="folder"><button id="browse" type="button">選擇</button></div>
         <label style="display:flex;align-items:center;gap:8px;margin-top:10px"><input id="auto" type="checkbox">開啟程式後自動開始接收</label>
-        <button class="qrbtn" id="rescan" type="button" style="margin-top:8px">補核對資料夾內 JPG</button>
+        <button class="qrbtn" id="rescan" type="button" style="margin-top:8px">重新整理資料夾內 JPG</button>
       </section>
       <div class="spacer"></div>
       <button class="run" id="run" type="button">開始接收</button>
@@ -114,9 +114,11 @@ select,input{width:100%;height:36px;border:1px solid var(--line);border-radius:8
 <div class="mask" id="mask"><div class="dialog"><canvas id="qrc" width="332" height="332"></canvas><p id="qrhint"></p></div></div>
 <script>
 const $ = id => document.getElementById(id);
+const uiToken = "__CAMLINK_UI_TOKEN__";
 let qrRows = null, pairCode = "", pairPrint = "";
 async function api(path, body){
-  const opt = body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)} : {};
+  const opt = {headers:{"X-CamLink-UI-Token":uiToken}};
+  if(body){ opt.method = "POST"; opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const res = await fetch(path, opt);
   const data = await res.json().catch(()=>({}));
   if(!res.ok) throw new Error(data.error || "無法完成");
@@ -204,7 +206,7 @@ $("browse").onclick = async () => { try{ const s = await api("/api/browse", {});
 $("open").onclick = async () => { try{ await api("/api/open", {folder:$("folder").value}); }catch(e){ alert(e.message); } };
 $("auto").onchange = async () => { try{ await api("/api/auto", {on:$("auto").checked}); }catch(e){ alert(e.message); } };
 $("rescan").onclick = async () => { try{ await api("/api/rescan", {}); tick(); }catch(e){ alert(e.message); } };
-addEventListener("pagehide", () => navigator.sendBeacon("/api/quit"));
+addEventListener("pagehide", () => navigator.sendBeacon("/api/quit?session="+encodeURIComponent(uiToken)));
 api("/api/hello", {}).then(tick).catch(tick);
 setInterval(tick, 400);
 </script>

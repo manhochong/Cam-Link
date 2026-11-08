@@ -91,3 +91,29 @@ workflows:
         submit_to_testflight: true
         beta_groups:
           - CamLink Internal
+
+  mac-receiver-smoke:
+    name: Mac Receiver smoke
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: latest
+    scripts:
+      - name: Test receiver on macOS
+        script: |
+          set -euo pipefail
+          test "$(uname -s)" = "Darwin"
+          if ! command -v go >/dev/null 2>&1; then brew install go; fi
+          go version
+          mkdir -p build/mac-tests
+          GO111MODULE=off go test -race -v ./mac | tee build/mac-tests/results.txt
+      - name: Package universal macOS app
+        script: |
+          set -euo pipefail
+          python3 -m venv /tmp/camlink-package-env
+          /tmp/camlink-package-env/bin/python -m pip install Pillow
+          /tmp/camlink-package-env/bin/python tools/package_mac_receiver.py
+          echo 'Universal test bundle built; Developer ID signing/notarization and interactive GUI validation remain separate.'
+    artifacts:
+      - release/CamLink-Receiver-macOS.zip
+      - build/mac-tests/results.txt
