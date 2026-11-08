@@ -344,6 +344,10 @@ final class PTPPhotoReceiver {
         } catch {
             guard valid(token) else { return }
             let detail = Self.describe(error)
+            if let local = error as? ReceiveFailure, local.domain == "CamLink.JPEGValidation",
+               retries[handle, default: 0] == 0 {
+                trace("JPEG_REJECT path=ptp handle=\(handle) \(detail)")
+            }
             trace("PTP_OBJECT_ERROR handle=\(handle) \(detail)")
             if let response = error as? PTPResponseError {
                 if response.code == 0x2019 || response.code == 0x2009 {
@@ -371,9 +375,12 @@ final class PTPPhotoReceiver {
         let data = try await reader.object(handle, maxBytes: Self.maxObjectBytes)
         guard valid(token) else { throw CancellationError() }
         // This scope ends before the next pump iteration; no buffer is cached.
-        return try await Task.detached(priority: .utility) {
+        let result = try await Task.detached(priority: .utility) {
             try Self.persist(data, name: name, expected: expected, folder: folder)
         }.value
+        guard valid(token) else { throw CancellationError() }
+        trace("JPEG_VALIDATED path=ptp handle=\(handle) \(result.diagnostic)")
+        return result.photo
     }
 
     private func retry(_ handle: UInt32, reason: String) {
@@ -455,7 +462,7 @@ final class PTPPhotoReceiver {
     }
 
     nonisolated private static func persist(_ data: Data, name: String, expected: Int64,
-                                            folder: URL) throws -> ReceivedJPEG {
+                                            folder: URL) throws -> (photo: ReceivedJPEG, diagnostic: String) {
         guard data.count <= maxObjectBytes else {
             throw ReceiveFailure(reason: "照片超過單張 128 MB 接收上限", domain: "CamLink.PTPPhotoReceiver", code: 2, retryable: false)
         }
@@ -472,12 +479,13 @@ final class PTPPhotoReceiver {
             switch CameraCaptureService.validateJPEG(temporary, expected: expected) {
             case .success(let value): verified = value
             case .failure(let error):
-                throw ReceiveFailure(reason: error.localizedDescription, domain: "CamLink.JPEGValidation", code: 4, retryable: true)
+                throw ReceiveFailure(reason: error.localizedDescription, domain: "CamLink.JPEGValidation", code: 4, retryable: error.retryable)
             }
             // Same-directory rename publishes only a complete, validated file.
             try FileManager.default.moveItem(at: temporary, to: destination)
-            return ReceivedJPEG(id: id, name: name, url: destination, bytes: verified.bytes,
-                                sha256: verified.sha, createdAt: Date(), uploaded: false)
+            let photo = ReceivedJPEG(id: id, name: name, url: destination, bytes: verified.bytes,
+                                     sha256: verified.sha, createdAt: Date(), uploaded: false)
+            return (photo, verified.diagnostic)
         } catch let error as ReceiveFailure { throw error }
         catch {
             let ns = error as NSError

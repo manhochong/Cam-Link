@@ -18,6 +18,15 @@ workflows:
             ios/CamLink/Camera/PTPCameraReader.swift ios/PTPCodecTests.swift \
             -o build/ptp-tests/codec-tests
           build/ptp-tests/codec-tests | tee build/ptp-tests/results.txt
+      - name: Test JPEG integrity with ImageIO (no camera required)
+        script: |
+          set -euo pipefail
+          mkdir -p build/jpeg-tests
+          xcrun --sdk macosx swiftc -swift-version 5 -strict-concurrency=minimal \
+            -target "$(uname -m)-apple-macosx13.0" \
+            ios/CamLink/Camera/JPEGIntegrity.swift ios/JPEGIntegrityTests.swift \
+            -o build/jpeg-tests/integrity-tests
+          build/jpeg-tests/integrity-tests | tee build/jpeg-tests/results.txt
       - name: Install XcodeGen
         script: |
           brew install xcodegen
@@ -56,6 +65,7 @@ workflows:
     artifacts:
       - build/ios-smoke/Build/Products/Debug-iphoneos/*.app
       - build/ptp-tests/results.txt
+      - build/jpeg-tests/results.txt
     triggering:
       events:
         - push
@@ -88,6 +98,15 @@ workflows:
             ios/CamLink/Camera/PTPCameraReader.swift ios/PTPCodecTests.swift \
             -o build/ptp-tests/codec-tests
           build/ptp-tests/codec-tests | tee build/ptp-tests/results.txt
+      - name: Test JPEG integrity with ImageIO (no camera required)
+        script: |
+          set -euo pipefail
+          mkdir -p build/jpeg-tests
+          xcrun --sdk macosx swiftc -swift-version 5 -strict-concurrency=minimal \
+            -target "$(uname -m)-apple-macosx13.0" \
+            ios/CamLink/Camera/JPEGIntegrity.swift ios/JPEGIntegrityTests.swift \
+            -o build/jpeg-tests/integrity-tests
+          build/jpeg-tests/integrity-tests | tee build/jpeg-tests/results.txt
       - name: Install XcodeGen
         script: |
           brew install xcodegen
@@ -113,6 +132,7 @@ workflows:
     artifacts:
       - build/ios/ipa/*.ipa
       - build/ptp-tests/results.txt
+      - build/jpeg-tests/results.txt
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
     publishing:

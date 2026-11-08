@@ -48,6 +48,8 @@ final class CameraCaptureService: NSObject, ObservableObject {
     private var ptpSelected = false
     private var ptpAuthorizing = false
     private var ptpReceiver: PTPPhotoReceiver?
+    private var diagnosticHighlights: [String] = []
+    private var jpegHighlights = 0
 
     private struct DownloadJob {
         let file: ICCameraFile
@@ -88,6 +90,9 @@ final class CameraCaptureService: NSObject, ObservableObject {
         queuedCount = 0
         began = Date()
         catalogSignature = ""
+        logLines.removeAll()
+        diagnosticHighlights.removeAll()
+        jpegHighlights = 0
         browsing = true
         status = "正在要求相機存取權限…"
         record("START mode=\(mode.rawValue)")
@@ -425,12 +430,15 @@ final class CameraCaptureService: NSObject, ObservableObject {
                 case .success(let verified):
                     self.known.insert(job.key)
                     self.receivedCount += 1
+                    self.record("JPEG_VALIDATED path=native name=\(job.name) \(verified.diagnostic)")
                     self.record("DOWNLOAD_OK \(job.name) bytes=\(verified.bytes)")
                     self.onJPEG?(ReceivedJPEG(id: UUID().uuidString, name: job.name, url: path,
                         bytes: verified.bytes, sha256: verified.sha, createdAt: Date(), uploaded: false))
                     self.active = nil
                     self.downloadNext()
-                case .failure(let error): self.downloadFailed(job, error.localizedDescription)
+                case .failure(let error):
+                    self.record("JPEG_REJECT path=native name=\(job.name) \(error.localizedDescription)")
+                    self.downloadFailed(job, error.localizedDescription)
                 }
             }
         }
@@ -452,7 +460,20 @@ final class CameraCaptureService: NSObject, ObservableObject {
     }
 
     private func record(_ text: String) {
-        logLines.append("\(ISO8601DateFormatter().string(from: Date())) \(text)")
+        let line = "\(ISO8601DateFormatter().string(from: Date())) \(text)"
+        logLines.append(line)
+        // Preserve setup and the first few image results even after a whole-card
+        // import fills the rolling log. Never persist full image/EXIF bytes.
+        if diagnosticHighlights.count < 48 {
+            if text.hasPrefix("JPEG_") {
+                if jpegHighlights < 8 {
+                    diagnosticHighlights.append(line)
+                    jpegHighlights += 1
+                }
+            } else if diagnosticHighlights.count < 40 {
+                diagnosticHighlights.append(line)
+            }
+        }
         if logLines.count > 400 { logLines.removeFirst(logLines.count - 400) }
     }
 
@@ -461,7 +482,9 @@ final class CameraCaptureService: NSObject, ObservableObject {
         if let camera { recordCatalog(camera, inventory: files(camera), reason: "REPORT", force: true) }
         let header = "Cam Link \(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))\n\(UIDevice.current.model) / \(UIDevice.current.systemName) \(UIDevice.current.systemVersion)\n\(authorization)\nmode=\(mode.rawValue) camera=\(cameraName)\nbrowsing=\(browsing) connected=\(connected) catalogReady=\(catalogReady) finishing=\(finishing)\nstatus=\(status) catalog=\(catalogCount) pending=\(queuedCount) failed=\(failedCount) received=\(receivedCount)\nlastError=\(lastError)\nNo receiver passwords or pairing codes are included.\n\n"
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("CamLink-camera-diagnostics.txt")
-        do { try (header + logLines.joined(separator: "\n")).write(to: path, atomically: true, encoding: .utf8); return path }
+        let highlights = "SESSION HIGHLIGHTS (may repeat rolling log entries)\n" + diagnosticHighlights.joined(separator: "\n")
+        let rolling = "\n\nRECENT EVENTS\n" + logLines.joined(separator: "\n") + "\n"
+        do { try (header + highlights + rolling).write(to: path, atomically: true, encoding: .utf8); return path }
         catch { lastError = "無法匯出診斷：\(error.localizedDescription)"; return nil }
     }
 
@@ -490,23 +513,23 @@ final class CameraCaptureService: NSObject, ObservableObject {
         return String(clean.prefix(140)) + ".jpg"
     }
 
-    struct VerifiedJPEG: Sendable { let bytes: Int64; let sha: String }
-    struct ValidationError: LocalizedError, Sendable { let errorDescription: String? }
+    struct VerifiedJPEG: Sendable { let bytes: Int64; let sha: String; let diagnostic: String }
+    struct ValidationError: LocalizedError, Sendable {
+        let errorDescription: String?
+        var retryable = false
+    }
     nonisolated static func validateJPEG(_ path: URL, expected: Int64) -> Result<VerifiedJPEG, ValidationError> {
         do {
             let data = try Data(contentsOf: path, options: .mappedIfSafe)
-            guard data.count >= 4, data[0] == 0xFF, data[1] == 0xD8,
-                  data[data.count - 2] == 0xFF, data[data.count - 1] == 0xD9 else {
-                return .failure(ValidationError(errorDescription: "不是完整 JPG（缺少 SOI／EOI）"))
+            do {
+                let verified = try JPEGIntegrity.validate(data, expected: expected)
+                return .success(VerifiedJPEG(bytes: verified.bytes, sha: verified.sha,
+                                              diagnostic: JPEGIntegrity.diagnostic(data)))
+            } catch {
+                let retryable = (error as? JPEGIntegrity.Failure)?.retryable ?? false
+                return .failure(ValidationError(errorDescription: "\(error.localizedDescription)；\(JPEGIntegrity.diagnostic(data))",
+                                                retryable: retryable))
             }
-            if expected > 0, expected != Int64(UInt32.max), Int64(data.count) != expected {
-                return .failure(ValidationError(errorDescription: "照片大小不符：\(data.count) / \(expected) bytes"))
-            }
-            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                  CGImageSourceGetType(source) == UTType.jpeg.identifier as CFString else {
-                return .failure(ValidationError(errorDescription: "JPG 結構無法識別"))
-            }
-            return .success(VerifiedJPEG(bytes: Int64(data.count), sha: sha256Hex(data)))
         } catch { return .failure(ValidationError(errorDescription: error.localizedDescription)) }
     }
 

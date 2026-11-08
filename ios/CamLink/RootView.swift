@@ -261,7 +261,24 @@ struct RootView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("本機已收 \(session.photos.count) 張 · 電腦已核對 \(session.verifiedCount) 張")
                 .font(.subheadline).foregroundStyle(.secondary)
-            if session.photos.isEmpty { Text("尚未收到 JPG。請先在首頁連接相機。").padding(.vertical, 24) }
+            if camera.failedCount > 0 || !camera.lastError.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("本次接收需要檢查", systemImage: "exclamationmark.triangle")
+                        .font(.headline).foregroundStyle(.red)
+                    Text("目錄 \(camera.catalogCount) 個物件 · 本次收下 \(camera.receivedCount) 張 · 失敗 \(camera.failedCount) 個")
+                        .font(.footnote).monospacedDigit()
+                    Text(camera.lastError).font(.footnote).textSelection(.enabled)
+                    Text("未通過完整性驗證的檔案不會列為已收照片，也不會傳到電腦。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("產生 USB 相機診斷報告") { diagnosticURL = camera.diagnosticFile() }
+                        .buttonStyle(.bordered)
+                    if let diagnosticURL { ShareLink("分享診斷報告", item: diagnosticURL) }
+                }.padding(14).background(soft, in: RoundedRectangle(cornerRadius: 12))
+            }
+            if session.photos.isEmpty {
+                Text(camera.failedCount > 0 ? "尚未收到可通過驗證的 JPG；請查看上方接收錯誤。" : "尚未收到 JPG。請先在首頁連接相機。")
+                    .padding(.vertical, 24)
+            }
             ForEach(session.photos) { photo in
                 HStack(spacing: 12) {
                     Button { selectedPhoto = photo } label: {

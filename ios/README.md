@@ -7,6 +7,12 @@
 - 候選 build 37 增加真正 WebDAV 原圖上傳與批量系統分享。Google Drive／OneDrive 直接登入仍待原生 OAuth 設定，不包含相機 Wi‑Fi 或 FlashAir；不能把分享介面當成雲端已核對。
 - ImageCaptureCore 是 iOS 可用的 [Apple 官方相機匯入介面](https://developer.apple.com/documentation/imagecapturecore)；它不是 Android 的原始 USB bulk API。不同相機、韌體和 USB 轉接器仍需逐台實測。
 
+### build 40：JPG 結構驗證與接收失敗顯示候選版
+
+build 39 已實機列出 154 個物件並執行 JPG GetObject，但最終成功 0 張、失敗 74 個。可見下載回傳成功且大小相等，全部停在合併的「缺少 SOI／EOI」檢查。首頁與紀錄頁尚無照片，是因為驗證未成功，不是照片已保存但兩頁不同步。報告未包含照片起訖 bytes，不能斷言相機照片損壞，也不能把區塊對齊大小直接當成填充證據。
+
+build 40 候選版以 JPEG 主影像結構和 ImageIO 解碼取代「EOI 必須是整檔最後兩 bytes」的規則；只容納有界纯填充，仍核對原始總大小與整檔 SHA-256，不裁切或重新壓縮。新增非敏感 JPEG 邊界摘要；紀錄頁顯示本次接收失敗和診斷分享，不建立未驗證的假照片。確定的格式拒絕不再重新下載六次，並保留本場首次 JPG 結果。新 ImageIO 回歸、完整編譯與 build 40 TestFlight 指派尚待確認，不能提前更新到候選版或宣稱相機收檔已成功。
+
 ### build 39：DeviceInfo 尾端相容修正候選版
 
 build 36 的 DC-S1RM2／iPadOS 26.5.2 診斷顯示授權、session 和 PTP 事件均成功，但三次 native 目錄為空，沒有開始下載。build 37 在空目錄時使用原生 PTP command 介面，重新查詢物件 handle，再取得 ObjectInfo／JPG。只發送標準唯讀命令；不開啟第二個 USB session、不改拍攝設定、不刪相機照片。非空 native 目錄仍保留原有 ImageCaptureCore 路徑。

@@ -1,4 +1,4 @@
-# DC-S1RM2／iPad USB 接收診斷：build 36–39
+# DC-S1RM2／iPad USB 接收診斷：build 36–40
 
 使用者提供的 `CamLink-camera-diagnostics.txt` 顯示 App 0.2.25（36），iPadOS 26.5.2。三次相機權限及內容授權均成功，三次 `SESSION_OPEN` 均成功；三次 `BASELINE` 都是 0 個物件。日誌有 56 次 16-byte PTP 事件，但沒有 `ITEMS_ADDED` 或 `DOWNLOAD_BEGIN`。
 
@@ -40,6 +40,18 @@ build 39 候選版只移除 DeviceInfo 標準欄位後的 exact-end 限制：所
 
 下一次先測卡內既有 JPG，建立基本列檔／下載的證據，再測新拍 JPG。若仍失敗，分享 build 39 的新報告與相機 USB 設定頁／模式。報告中的 `mode=接收新拍 JPG` 是 App 模式，不是相機的 PC(Tether)／PC(Storage) USB 模式；這項相機設定目前仍未提供，不應臆測。
 
+## build 39 實機下載與 JPG 驗證拒絕
+
+2026-11-08 使用者提供的 `pasted_content_3.txt` 是 build 39 卡內 JPG 接收報告：最終目錄 154 個物件，74 個失敗，成功接收 0 張。09:48:01–09:48:18 UTC 的可見日誌含 56 次完整 GetObject 回傳，均為 `2001`，payload 大小與 ObjectInfo 宣告大小相等。原生資料和正規化 payload 的大小也相等，這些可見照片沒有被誤剝除 12-byte 頭。這次已越過 DeviceInfo 與列檔階段，停止位置是本機 JPG 驗證，不是首頁／紀錄的清單同步問題。
+
+`validateJPEG` 原本要求首兩 bytes 是 `FF D8`，而且整份檔案最後兩 bytes 是 `FF D9`；任一條件失敗均只回報「缺少 SOI／EOI」。這份報告未包含影像边界，因此不能知道是哪一端失敗。56 個可見大小都是 512-byte 整數倍，值得查驗尾端填充，但這不是填充證據。JPEG 檔案在主影像 EOI 後可能仍有尾端資料，且 APP／EXIF 內嵌縮圖也可能出現 `FF D9`；不能拿任意最後一個 marker 截斷或直接繞過驗證。[6] [7]
+
+PTP 接收先寫自己的暫存檔，再驗證，只有成功才 rename 並發送 `onJPEG`。首頁預覽與紀錄頁都使用 `ShootSession.photos`，所以此次沒有任何驗證成功就不會出現照片。失敗暫存檔會被刪除，不會成為假已收紀錄；相機原檔沒有被刪除。400 條 rolling log 已被大量重試覆蓋，此報告不是全部 74 張的完整下載歷史，也沒有完整初始化資訊。
+
+build 40 候選修正用主 JPEG marker 結構定位 EOI，跳過 metadata 區段並處理 entropy stuffing／restart／多次 scan，再交由 Apple ImageIO 解碼。保留原始總大小核對，僅容納有界且純 `00`／`FF` 的尾端填充；不接受未知非填充資料，不裁切、不重新壓縮，SHA-256 仍覆蓋保存的整份原檔。這是處理已知驗證缺口的候選修正，尚未證明此次相機內容屬於可接受的填充。新增區分 SOI 起點、EOI 結構位置與尾端分類的摘要，不輸出照片、EXIF 或尾端原文。
+
+候選版紀錄頁會顯示真實接收失敗與匯出診斷入口，不只顯示「尚未收到」；確定的格式拒絕不再重抓同一張大型照片六次。每次開始接收會清空上一場 rolling log，保留本場初始化和首幾個 JPG 結果摘要，避免全卡重試掩蓋關鍵證據。Mac ImageIO 回歸和完整 iOS 簽名／分發仍待驗證。使用者若能提供安全、未編輯的相機原始 JPG，可獨立確認影像的實際起訖與尾端，不必把原圖公開上傳或提交 GitHub。
+
 ## 其他相機的支援範圍
 
 iOS 目前沒有完成實機驗收的相機型號清單；DC-S1RM2 也仍是修正候選版測試中。標準 PTP 讀取不按品牌限制，但相機必須提供標準物件查詢／讀取能力，USB 模式與 iPadOS 也須相容。讀取卡內既有 JPG 與 USB 連線中拍攝新 JPG 是兩項不同能力，不能以其中一項成功推斷另一項已支援。
@@ -53,3 +65,5 @@ Android `MainActivity.java` 的既有文案記錄 LUMIX S1、S1 II、S1R II 有�
 [3]: https://developer.apple.com/documentation/imagecapturecore/iccameradevice/tetheredcaptureenabled "Apple tethered capture status"
 [4]: https://eww.pavc.panasonic.co.jp/dscoi/DC-S1RM2/html/DC-S1RM2_DVQP3245_eng/0161.html "Panasonic DC-S1RM2 tethered recording"
 [5]: https://raw.githubusercontent.com/gphoto/libgphoto2/master/camlibs/ptp2/ptp-pack.c "libgphoto2 DeviceInfo dataset decoding"
+[6]: https://stackoverflow.com/questions/39486044/what-is-known-about-trailing-data-after-the-eoi-marker-ffd9-in-jpeg-images "JPEG trailing data observations"
+[7]: https://www.imperialviolet.org/binary/jpeg/ "JPEG marker and entropy stream structure"
