@@ -25,7 +25,9 @@ Mac QR 編碼器產生的三個測試配對碼，已用獨立 ZXing 解碼器讀
 
 日常使用先在 Windows 啟動接收器，讓 iPad 與電腦連同一個可互通的區網；選正確 IPv4、顯示 QR、在 Cam Link 掃描並核對指紋，再傳一張照片。這已能測試手機到接收器的完整協定，不需要 Mac。
 
-已加入手動 Codemagic 工作流程 `mac-receiver-smoke`。它使用 Apple Silicon Mac runner 執行 Go race 測試，並封裝 universal `.app`；不需要使用者的 Mac、UDID 或 iOS Distribution 憑證。此文件目前只證實沙箱測試及交叉編譯，**macOS runner 結果尚待執行確認**。
+已加入手動 Codemagic 工作流程 `mac-receiver-smoke`。它使用 Apple Silicon Mac runner 執行 Go race 測試，並封裝 universal `.app`；不需要使用者的 Mac、UDID 或 iOS Distribution 憑證。
+
+2026-11-08 已實際完成 [Codemagic Mac smoke build](https://codemagic.io/app/6aef519ed8a3160714e6051f/build/6af031c224e1ec2375576e7c)。測試日誌確認 `go version go1.26.4 darwin/arm64`，全部 Go 測試及 race 檢查 `PASS`；universal 封裝與 artifacts 步驟亦成功。這已是 macOS runner 驗證，不只 Linux 交叉編譯。
 
 最後仍需要雲端互動式 Mac 或一位持有 Mac 的測試者，檢查下載解壓後啟動、預設瀏覽器畫面、資料夾選擇、macOS 本機網絡／通知／防火牆權限、休眠重連，以及從實際 iPad 傳一張 JPG 的結果。沒有跑過這些項目前，不能宣稱 Mac 版已全面可用。
 
