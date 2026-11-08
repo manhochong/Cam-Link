@@ -1,3 +1,4 @@
+import CoreGraphics
 import CryptoKit
 import Foundation
 import ImageCaptureCore
@@ -233,23 +234,6 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
         }
     }
 
-    nonisolated func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
-        Task { @MainActor in
-            self.ingestNewJPEGs(from: device)
-        }
-    }
-
-    nonisolated func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) {
-        Task { @MainActor in
-            for item in items {
-                guard let file = item as? ICCameraFile, self.isJPEG(file) else { continue }
-                let key = self.fileKey(file)
-                if self.knownHandles.contains(key) || self.downloading.contains(key) { continue }
-                self.download(file, on: camera, key: key)
-            }
-        }
-    }
-
     nonisolated func didRemove(_ device: ICDevice) {
         Task { @MainActor in
             if device === self.camera {
@@ -265,6 +249,57 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
             if let error {
                 self.lastError = error.localizedDescription
             }
+        }
+    }
+
+    // Latest ImageCaptureCore uses didAddItems / didRemoveItems (not didAdd / didRemove).
+    nonisolated func cameraDevice(_ camera: ICCameraDevice, didAddItems items: [ICCameraItem]) {
+        Task { @MainActor in
+            for item in items {
+                guard let file = item as? ICCameraFile, self.isJPEG(file) else { continue }
+                let key = self.fileKey(file)
+                if self.knownHandles.contains(key) || self.downloading.contains(key) { continue }
+                self.download(file, on: camera, key: key)
+            }
+        }
+    }
+
+    nonisolated func cameraDevice(_ camera: ICCameraDevice, didRemoveItems items: [ICCameraItem]) {}
+
+    nonisolated func cameraDevice(_ camera: ICCameraDevice, didAddItem item: ICCameraItem) {
+        cameraDevice(camera, didAddItems: [item])
+    }
+
+    nonisolated func cameraDevice(_ camera: ICCameraDevice, didRemoveItem item: ICCameraItem) {}
+
+    nonisolated func cameraDevice(_ camera: ICCameraDevice, didRenameItems items: [ICCameraItem]) {}
+
+    nonisolated func cameraDeviceDidChangeCapability(_ camera: ICCameraDevice) {}
+
+    nonisolated func cameraDevice(
+        _ camera: ICCameraDevice,
+        didReceiveThumbnail thumbnail: CGImage?,
+        for item: ICCameraItem,
+        error: (any Error)?
+    ) {}
+
+    nonisolated func cameraDevice(
+        _ camera: ICCameraDevice,
+        didReceiveMetadata metadata: [AnyHashable: Any]?,
+        for item: ICCameraItem,
+        error: (any Error)?
+    ) {}
+
+    nonisolated func cameraDevice(_ camera: ICCameraDevice, didReceivePTPEvent eventData: Data) {}
+
+    nonisolated func cameraDevice(
+        _ camera: ICCameraDevice,
+        didCompleteDeleteFilesWithError error: (any Error)?
+    ) {}
+
+    nonisolated func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
+        Task { @MainActor in
+            self.ingestNewJPEGs(from: device)
         }
     }
 }
