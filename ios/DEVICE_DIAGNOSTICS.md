@@ -24,7 +24,9 @@ build 37 的 adapter 把 callback 第一份 235 bytes 當 response，第二份 1
 
 build 38 的同一 normalizer 用於實際 adapter 和回歸測試。只有一份完整、type-3、標準 response-code 範圍的 response 才接受；兩份都像 response 或兩份皆不合法均拒絕。response 錯誤碼不會被 payload 大小或空資料遮住。保留 byte cap、完整資料／JPG 檢查、序列佇列與逾時保護。新增 `PTP_NATIVE firstBytes／secondBytes／firstResponse／secondResponse` 與 `responseSlot` 日誌，不輸出照片內容或相機序號。
 
-後續 `C101`、`C107`、`C104` 是廠商事件，這份報告不含標準 `4002` ObjectAdded。其參數不可直接當 JPG handle。修正首個查詢後，再以 fresh inventory 與標準查詢結果確認相機是否暴露新照片；目前不據此增加廠商寫入、拍攝或屬性命令。build 38 尚待雲端編譯、TestFlight 指派及實機驗證。
+後續 `C101`、`C107`、`C104` 是廠商事件，這份報告不含標準 `4002` ObjectAdded。其參數不可直接當 JPG handle。修正首個查詢後，再以 fresh inventory 與標準查詢結果確認相機是否暴露新照片；目前不據此增加廠商寫入、拍攝或屬性命令。build 38 已完成雲端編譯與內部分發；是否真的可查詢到相片並下載，仍需 iPad 實機驗證。
+
+Codemagic build 38 `6af03f0f24e1ec237557723a` 已實際在 macOS runner 執行回歸測試，輸出 `PTPCodecChecks: 503 offline checks passed; no camera operations performed.`。新增 callback case 使用合成、有效的 235-byte DeviceInfo 與 12-byte response；這是重現長度與角色的測試資料，不是使用者相機回傳的原始內容。完整 iOS SDK 編譯、簽名匯出與最終 metadata 檢查均通過；Apple uploader 在 09:24:23 UTC 回覆 `UPLOAD SUCCEEDED with no errors`。已核實 App Store Connect build 38 為 `Testing`，且加入 `CamLink Internal`。可在 TestFlight 更新至 `0.2.25 (38)`，重新接線後先測卡內 JPG，再測 fresh baseline 之後的新拍 JPG。若仍失敗，提供 build 38 新診斷與相機 USB 模式；目前不能宣稱硬體相容已修復。
 
 ## 其他相機的支援範圍
 

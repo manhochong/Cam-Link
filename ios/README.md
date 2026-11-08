@@ -13,11 +13,11 @@ build 36 的 DC-S1RM2／iPadOS 26.5.2 診斷顯示授權、session 和 PTP 事�
 
 build 37 實機回報進一步顯示：PTP 授權成功，但首個 `GetDeviceInfo` 因 callback 第一份 235-byte 資料被當作 12–32-byte response 而停止。build 38 以完整 type-3 response header／回應碼辨識兩份 Data 的角色，不再硬認第一份是 response。相同 normalizer 同時用於實際 adapter 和新增回歸測試，涵蓋兩種順序、錯誤／空回應、歧義及 payload budget。這是 App 的解析缺陷，不是使用者權限設定錯誤。
 
-此候選版亦修正黑底主按鈕的文字對比，並用原圖 metadata／EXIF 方向決定照片比例，未收到照片時使用 4:3 預覽；iPad 直向不再把預覽固定壓成矮長框。431 項 PTP codec 離線檢查、完整 App 的 Apple SDK 編譯、簽名 IPA 匯出及最終 metadata 檢查均已通過。DC-S1RM2 實機接收和 WebDAV 遠端 PUT／GET 仍須驗證，不能只憑編譯判定支援成功。
+此候選版保留黑底主按鈕的文字對比修正，並用原圖 metadata／EXIF 方向決定照片比例，未收到照片時使用 4:3 預覽；iPad 直向不再把預覽固定壓成矮長框。build 38 已在 Codemagic `6af03f0f24e1ec237557723a` 通過 503 項 callback／codec 離線檢查、完整 App 的 Apple SDK 編譯、簽名 IPA 匯出及最終 metadata 檢查。DC-S1RM2 實機接收和 WebDAV 遠端 PUT／GET 仍須驗證，不能只憑編譯判定支援成功。
 
 build 35 雖成功上傳，Apple 後續處理以 `90683` 指出封裝檔缺少相機用途說明。build 36 改為直接使用已提交的 Info.plist，不讓 XcodeGen 覆寫用途與 QR Scheme，並在 CI 驗證最終 IPA 的這些欄位。`python3 ios/verify_metadata.py <Info.plist 或 IPA 路徑>` 可重用此檢查。
 
-目前已確認可安裝的是 build 37，但它在本次 DC-S1RM2 測試仍無法接收。build 38 尚待新簽名建置與內部群組確認；確認後才更新到 `0.2.25 (38)`。測試時先用「接收卡內 JPG」收原有照片，再停止並重新選「開始接收新拍 JPG」，等完成 fresh baseline 後才拍新照片；兩者模式不同。卡內模式會嘗試接收現有全部 JPG，適合先用只有少量 JPG 的測試卡。若仍失敗，分享 build 38 新診斷；新增的 `PTP_NATIVE`／`responseSlot` 能判斷是否已通過 callback 解析，並顯示後續查詢回應碼。
+2026-11-08 已確認 App Store Connect build 38 為 `Testing`，已加入 `CamLink Internal`。在 iPad 的 TestFlight 更新至 `0.2.25 (38)`；確認版本後先重新接線，避免沿用失敗的 native session。先用「接收卡內 JPG」收原有照片，再停止並重新選「開始接收新拍 JPG」，等完成 fresh baseline 後才拍新照片；兩者模式不同。卡內模式會嘗試接收現有全部 JPG，適合先用只有少量 JPG 的測試卡。若仍失敗，分享 build 38 新診斷並提供相機 USB 模式；新增的 `PTP_NATIVE`／`responseSlot` 能判斷是否已通過 callback 解析，並顯示後續查詢回應碼。實機收檔尚待此次更新驗證。
 
 在「傳送」→「配對／更改電腦」→「掃描電腦 QR Code」掃描 Windows 或 Mac Receiver 的配對 QR，或用系統相機掃描後開啟 Cam Link。QR 只預填電腦地址與配對碼；仍需按「探測並顯示指紋」，核對與接收器畫面相同後完成配對。iPad 不需要使用 Mac 作為接收電腦，Windows Receiver 也使用相同的配對與 HTTPS 協定。
 
@@ -51,7 +51,7 @@ WebDAV 在「傳送」→「WebDAV（NAS／雲端資料夾）」設定已有可�
 
 2026-11-08 使用者已授權 build 36 的出口合規答覆，以及將 `ITSAppUsesNonExemptEncryption = false` 加入已提交的 Info.plist。此旗標適用於維持現行實作的後續版本：iOS 系統提供 TLS／Keychain，CryptoKit 僅作 SHA-256 雜湊，沒有額外實作問卷列出的加密演算法。若日後加入或改動加密，必須重新評估聲明；`false` 並非宣稱 App 完全不使用加密。已上傳 build 36 仍由 App Store Connect 的合規問卷處理，原始碼旗標不會修改已上傳二進位檔。
 
-build 37 已正常處理並加入群組，沒有再次要求人工出口合規答覆。後續簽名上傳須使用未上傳過的新 build 編號；不要直接重跑 build 37。修改 `project.yml` 的 `CURRENT_PROJECT_VERSION` 後再啟動 `ios-testflight-internal`。
+build 37 及 38 已正常處理並加入群組，沒有再次要求人工出口合規答覆。後續簽名上傳須使用未上傳過的新 build 編號；不要直接重跑 build 38。修改 `project.yml` 的 `CURRENT_PROJECT_VERSION` 後再啟動 `ios-testflight-internal`。
 
 ## 相機與接收器實機驗收
 
