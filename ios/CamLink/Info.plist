@@ -26,8 +26,6 @@
 	<string>Cam Link 需要存取經 USB 連接的相機，以接收 JPG 並傳到電腦。</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Cam Link 需要同一 Wi-Fi 連接電腦上的接收器。</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>可選擇把已核對的 JPG 存入相簿。</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

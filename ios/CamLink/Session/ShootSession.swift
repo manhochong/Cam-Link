@@ -1,19 +1,42 @@
+import Combine
 import Foundation
 
 @MainActor
 final class ShootSession: ObservableObject {
-    @Published var photos: [ReceivedJPEG] = []
-    @Published var autoUpload = true
+    @Published var photos: [ReceivedJPEG] = [] {
+        didSet { persist() }
+    }
+    @Published var autoUpload = true {
+        didSet { persist() }
+    }
     @Published var uploadMessage = ""
     @Published var uploading = false
 
-    private let sessionId: String
+    private(set) var sessionId = ""
+
+    private struct Snapshot: Codable {
+        var sessionId: String
+        var autoUpload: Bool
+        var photos: [ReceivedJPEG]
+    }
+
+    private var stateURL: URL {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return root.appendingPathComponent("CamLink", isDirectory: true)
+            .appendingPathComponent("session.json")
+    }
 
     init() {
-        let fmt = DateFormatter()
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.dateFormat = "yyyyMMdd-HHmmss"
-        sessionId = fmt.string(from: Date())
+        if let data = try? Data(contentsOf: stateURL),
+           let saved = try? JSONDecoder().decode(Snapshot.self, from: data),
+           !saved.sessionId.isEmpty {
+            sessionId = saved.sessionId
+            autoUpload = saved.autoUpload
+            photos = saved.photos.filter { FileManager.default.fileExists(atPath: $0.url.path) }
+        } else {
+            sessionId = Self.makeSessionId(for: Date())
+        }
+        persist()
     }
 
     var verifiedCount: Int { photos.filter(\.uploaded).count }
@@ -25,9 +48,10 @@ final class ShootSession: ObservableObject {
     }
 
     func remoteName(for photo: ReceivedJPEG) -> String {
-        // Match Android DavBackup drain naming: sessionFolder_localFile
+        // Match the desktop Receiver's safe filename format.
         let local = photo.url.lastPathComponent
         return "\(sessionId)_\(local)"
+            .replacingOccurrences(of: " ", with: "_")
     }
 
     func uploadPending(using pair: ComputerPair) async {
@@ -35,24 +59,31 @@ final class ShootSession: ObservableObject {
             uploadMessage = "請先配對電腦"
             return
         }
+        guard !uploading else { return }
+
         uploading = true
         defer { uploading = false }
+
         var ok = 0
         var fail = 0
-        for index in photos.indices where !photos[index].uploaded {
-            let photo = photos[index]
+        var attempted = Set<String>()
+
+        // Re-read by stable photo ID after each await; new arrivals are picked up
+        // by this loop without relying on array indexes that may shift meanwhile.
+        while let photo = photos.first(where: { !$0.uploaded && !attempted.contains($0.id) }) {
+            attempted.insert(photo.id)
             let name = remoteName(for: photo)
-            // Receiver FILENAME: [a-z0-9][a-z0-9_.-]{0,190}\.jpe?g
-            let safe = name.replacingOccurrences(of: " ", with: "_")
             do {
                 try await PcClient.put(
                     pair: pair,
                     fileURL: photo.url,
-                    remoteName: safe,
+                    remoteName: name,
                     sha256: photo.sha256,
                     size: photo.bytes
                 )
-                photos[index].uploaded = true
+                if let index = photos.firstIndex(where: { $0.id == photo.id }) {
+                    photos[index].uploaded = true
+                }
                 ok += 1
             } catch PcClientError.serverBusy {
                 uploadMessage = "電腦忙碌，稍後再傳"
@@ -63,12 +94,33 @@ final class ShootSession: ObservableObject {
                 fail += 1
             }
         }
+
         if fail == 0 {
-            uploadMessage = ok == 0 ? "沒有待傳 JPG" : "已傳到電腦 \(ok) 張"
+            uploadMessage = ok == 0 ? "沒有待傳 JPG" : "已傳到電腦並核對 \(ok) 張"
         }
     }
 
     func markNeedsUploadAll() {
-        for i in photos.indices { photos[i].uploaded = false }
+        for index in photos.indices { photos[index].uploaded = false }
+    }
+
+    private func persist() {
+        guard !sessionId.isEmpty else { return }
+        let directory = stateURL.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let snapshot = Snapshot(sessionId: sessionId, autoUpload: autoUpload, photos: photos)
+            let data = try JSONEncoder().encode(snapshot)
+            try data.write(to: stateURL, options: .atomic)
+        } catch {
+            uploadMessage = "無法儲存場次資料：\(error.localizedDescription)"
+        }
+    }
+
+    private static func makeSessionId(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: date)
     }
 }

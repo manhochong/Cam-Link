@@ -1,4 +1,5 @@
 import CoreGraphics
+import Combine
 import CryptoKit
 import Foundation
 import ImageCaptureCore
@@ -97,6 +98,10 @@ final class CameraCaptureService: NSObject, ObservableObject {
     }
 
     private func fileKey(_ file: ICCameraFile) -> String {
+        let handle = file.ptpObjectHandle
+        if handle != UInt32.max {
+            return "PTP-\(handle)"
+        }
         if let name = file.name, !name.isEmpty { return name }
         return String(ObjectIdentifier(file).hashValue)
     }
@@ -104,7 +109,8 @@ final class CameraCaptureService: NSObject, ObservableObject {
     private func download(_ file: ICCameraFile, on _: ICCameraDevice, key: String) {
         downloading.insert(key)
         let safe = Self.safeName(file.name ?? "IMG.JPG")
-        let dest = folder.appendingPathComponent("\(Int(Date().timeIntervalSince1970))_\(safe)")
+        let stamp = Int(Date().timeIntervalSince1970 * 1_000)
+        let dest = folder.appendingPathComponent("\(stamp)_\(UUID().uuidString.prefix(8))_\(safe)")
         let options: [ICDownloadOption: Any] = [
             .downloadsDirectoryURL: dest.deletingLastPathComponent(),
             .saveAsFilename: dest.lastPathComponent,
@@ -139,7 +145,6 @@ final class CameraCaptureService: NSObject, ObservableObject {
             status = "下載失敗"
             return
         }
-        knownHandles.insert(ctx.key)
         // We set saveAsFilename ourselves; prefer that path, fall back to framework key.
         var path = ctx.dest
         if let saved = options?["ICSavedFilename"] as? String, !saved.isEmpty {
@@ -157,9 +162,11 @@ final class CameraCaptureService: NSObject, ObservableObject {
                 createdAt: Date(),
                 uploaded: false
             )
+            knownHandles.insert(ctx.key)
             onJPEG?(photo)
             status = "已收下 \(ctx.name)"
         } catch {
+            try? FileManager.default.removeItem(at: ctx.dest)
             lastError = error.localizedDescription
             status = "無法讀取已下載檔案"
         }
@@ -168,10 +175,22 @@ final class CameraCaptureService: NSObject, ObservableObject {
     nonisolated static func safeName(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let base = trimmed.isEmpty ? "IMG.JPG" : trimmed
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
         let mapped = String(base.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })
-        if mapped.lowercased().hasSuffix(".jpg") || mapped.lowercased().hasSuffix(".jpeg") { return mapped }
-        return mapped + ".JPG"
+        let lower = mapped.lowercased()
+        let ext: String
+        let stem: String
+        if lower.hasSuffix(".jpeg") {
+            ext = ".jpeg"
+            stem = String(mapped.dropLast(5))
+        } else if lower.hasSuffix(".jpg") {
+            ext = ".jpg"
+            stem = String(mapped.dropLast(4))
+        } else {
+            ext = ".jpg"
+            stem = mapped
+        }
+        return String(stem.prefix(140)) + ext
     }
 
     nonisolated static func sha256Hex(_ data: Data) -> String {
@@ -304,4 +323,3 @@ extension CameraCaptureService: ICCameraDeviceDelegate {
         }
     }
 }
-

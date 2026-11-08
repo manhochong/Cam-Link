@@ -6,6 +6,7 @@ struct RootView: View {
     @EnvironmentObject private var pair: PairStore
     @State private var showPair = false
     @State private var confirmFinger = false
+    @State private var qrText = ""
 
     var body: some View {
         NavigationStack {
@@ -85,6 +86,10 @@ struct RootView: View {
                 }
             }
             .sheet(isPresented: $showPair) { pairSheet }
+            .onAppear {
+                guard session.autoUpload, pair.pair.isReady else { return }
+                Task { await session.uploadPending(using: pair.pair) }
+            }
             .onChange(of: session.photos.count) { _ in
                 guard session.autoUpload, pair.pair.isReady else { return }
                 Task { await session.uploadPending(using: pair.pair) }
@@ -102,27 +107,21 @@ struct RootView: View {
                     TextField("配對碼（12 位）", text: $pair.draftCode)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    TextField("貼上 camlink://pair?…", text: Binding(
-                        get: { "" },
-                        set: { _ = pair.applyQR($0) }
-                    ))
+                    TextField("貼上 camlink://pair?…", text: $qrText)
                     .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .onChange(of: qrText) { value in
+                        if pair.applyQR(value) { qrText = "" }
+                    }
                 }
                 Section {
                     Button("探測並顯示指紋") {
                         Task {
                             await pair.probeAndConfirm()
-                            confirmFinger = true
+                            confirmFinger = pair.hasPendingFingerprint
                         }
                     }
                     .disabled(pair.busy || pair.draftHost.isEmpty || pair.draftCode.isEmpty)
-                    Button("指紋相同，完成配對") {
-                        Task {
-                            await pair.confirmFingerprint()
-                            showPair = false
-                        }
-                    }
-                    .disabled(pair.busy)
                     Button("清除配對", role: .destructive) { pair.clear() }
                 }
                 if !pair.message.isEmpty {
@@ -139,7 +138,7 @@ struct RootView: View {
                 Button("相同，完成配對") {
                     Task {
                         await pair.confirmFingerprint()
-                        showPair = false
+                        if pair.pair.isReady { showPair = false }
                     }
                 }
                 Button("取消", role: .cancel) {}
