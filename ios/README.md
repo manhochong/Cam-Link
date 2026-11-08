@@ -11,7 +11,11 @@
 
 build 40 新診斷顯示主影像 EOI 後仍有約 446 KB 非純填充資料，因此在 ImageIO 解碼前遭拒。使用者以 ZIP 私下提供的一張相機原始 JPG 已證實它含標準 MPF／MPO 索引：一張 7232 × 5424 主圖與一張 1440 × 1080 大型預覽圖，Pillow 已實際解碼兩張。索引所列大小與原圖各 JPEG 邊界相符；影像間與整檔尾端另有有界非零資料。這不是單純增加零填充上限能解決的問題。[MPF 格式說明](https://exiftool.org/TagNames/MPF.html)
 
-候選 build 41 讀取 APP2 MPF 的 TIFF 索引，核對大小、相對 offset、影像不重疊和每張 JPEG 的結構與解碼，再沿用同一本機保存及電腦上傳管線。原圖包含的主影像、預覽圖和其他 bytes 全部保留；不裁切、重新壓縮或只計算主圖 SHA。普通單影像 JPG 仍拒絕未知尾端，MPF 索引錯誤仍拒絕，不自動重抓六次。原照片只供私人分析，不加入 Git、IPA 或一般建置產物；CI 使用合成影像。Mac ImageIO 原圖驗證、簽名建置與 TestFlight 指派尚待完成，iPad 實機收檔仍待驗收。
+候選 build 41 讀取 APP2 MPF 的 TIFF 索引，核對大小、相對 offset、影像不重疊和每張 JPEG 的結構與解碼，再沿用同一本機保存及電腦上傳管線。原圖包含的主影像、預覽圖和其他 bytes 全部保留；不裁切、重新壓縮或只計算主圖 SHA。普通單影像 JPG 仍拒絕未知尾端，MPF 索引錯誤仍拒絕，不自動重抓六次。原照片只供私人分析，不加入 Git、IPA 或一般建置產物；CI 使用合成影像。
+
+Codemagic `6af04c7024e1ec237557767d` 已在真正 macOS runner 通過 575 項 PTP、59 項 JPEG ImageIO 和 131 項 MPF 回歸。使用臨時 SSH／SCP 私下傳送的使用者原圖亦已由 App 相同驗證器通過；主圖與索引第二張各自完成 ImageIO 驗證，完整 13,038,080 bytes 的 SHA-256 與沙箱原圖一致。ImageIO 對整份容器僅回報一張主圖，因此驗證器自行依 MPF 索引另行檢查預覽。Mac 原圖暫存副本與檢查程式已刪除，未公開傳檔。完整 signed IPA 與最終 metadata 檢查通過；10:21:44 UTC 上傳成功，10:24 UTC 已核實 App Store Connect `0.2.25 (41)` 為 `Testing`，已加入原有 `CamLink Internal`，1 位測試者。可在 TestFlight 更新至 build 41；這不取代 iPad 實機驗收。
+
+先更新至 `(41)`，重新接線，在「接收卡內 JPG」測試目前兩張 JPG；確認首頁顯示主照片，紀錄加入照片，並於已配對時檢查 Receiver 收檔及 SHA 核對。卡內模式成功後才另開新拍模式，等 fresh baseline 完成再拍新 JPG。若仍沒有照片，分享 build 41 完整診斷；新增 `container=MPF mpfImages=2 unindexed=728` 是這張原檔的已知結構，不要求其他照片的數字完全相同。新拍事件、其他相機、持久化及真正遠端 WebDAV／Receiver 上傳仍需分別實測。
 
 ### build 40：JPG 結構驗證與接收失敗顯示候選版
 
